@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.5.0';
+  var APP_VERSION = '2.6.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -45,7 +45,7 @@
     i.onload = function () { imgs[key] = i; };
     i.src = src;
   }
-  loadImg('field',   'field-3.jpg');
+  loadImg('ttlStage','ttl-stage.png');
   loadImg('bg',      'title-bg.jpg');
   loadImg('side',    'side.jpg');
   loadImg('jk0',     'jk-0.png');
@@ -105,10 +105,21 @@
   function titleBgm()  { playBgm('title',  'title.mp3',  0.5); }
   function battleBgm() { playBgm('battle', 'battle.mp3', 0.4); }
 
-  // field-3.jpg (970x1622) の中での氷の範囲・ゴールの幅・センターラインの位置
+  // 各ステージの盤面と、その絵の中での氷の範囲・ゴールの幅・センターラインの位置
   // （すべて画像サイズに対する割合）
-  var FLD = { x0:0.0680, x1:0.9278, y0:0.0826, y1:0.9223,
-              mid:0.4926, goal:0.1629, circle:0.093 };
+  var STAGES = [
+    { key:'ice',    src:'field-3.jpg',
+      fld:{ x0:0.0680, x1:0.9278, y0:0.0826, y1:0.9223, mid:0.4926, goal:0.1629, circle:0.093 } },
+    { key:'forest', src:'stage-forest.jpg',
+      fld:{ x0:0.0820, x1:0.9180, y0:0.0740, y1:0.9208, mid:0.4952, goal:0.1585, circle:0.093 } },
+    { key:'water',  src:'stage-water.jpg',
+      fld:{ x0:0.0820, x1:0.9180, y0:0.0740, y1:0.9208, mid:0.4952, goal:0.1585, circle:0.093 } },
+    { key:'lava',   src:'stage-lava.jpg',
+      fld:{ x0:0.0820, x1:0.9180, y0:0.0740, y1:0.9208, mid:0.4952, goal:0.1585, circle:0.093 } }
+  ];
+  var stageIdx = 0;
+  var FLD = STAGES[0].fld;
+  STAGES.forEach(function (st, i) { loadImg('stage' + i, st.src); });
   var F = { x:0, y:0, w:0, h:0, cx:0, cy:0 };   // 盤面（氷）の位置
   var IMG  = { x:0, y:0, w:0, h:0 };            // field-3.jpg を描く位置
   var TIMG = { x:0, y:0, w:0, h:0 };            // title-bg.jpg を描く位置
@@ -140,7 +151,7 @@
   ];
 
   var score      = [0, 0];
-  var mode       = 'title';  // 'title' | 'select' | 'janken' | 'count' | 'play' | 'goal' | 'win'
+  var mode       = 'title';  // 'title' | 'select' | 'stage' | 'janken' | 'count' | 'play' | 'goal' | 'win'
   var modeTimer  = 0;
   var goalSide   = 0;        // 得点したプレイヤー
   var serveSide  = 0;        // パックを転がしてもらう側（点を入れられた方）
@@ -387,6 +398,19 @@
              y: TIMG.y + TIMG.h * 0.5, w: w, h: h };
   }
 
+  // ステージ選択：上にロゴ、その下に2列×2段でステージを並べる
+  function stageBtnRect(i) {
+    var gapX = TIMG.w * 0.05, gapY = TIMG.h * 0.022;
+    var w = (TIMG.w * 0.86 - gapX) / 2;
+    var h = w / 0.60;                                  // 盤面の縦横比
+    var maxH = (TIMG.h * 0.60 - gapY) / 2;
+    if (h > maxH) { h = maxH; w = h * 0.60; }
+    var col = i % 2, row = (i / 2) | 0;
+    var cx0 = TIMG.x + TIMG.w / 2 + (col === 0 ? -(w + gapX) / 2 : (w + gapX) / 2);
+    var top = TIMG.y + TIMG.h * 0.34;
+    return { x: cx0, y: top + h / 2 + row * (h + gapY), w: w, h: h };
+  }
+
   function onDown(e) {
     audio();
     var p = pointerPos(e);
@@ -405,6 +429,16 @@
       for (var b = 0; b < 2; b++) {
         var rb = modeBtnRect(b);
         if (hitRect(p, rb)) { pressIdx = b; pressT = 0; burst(rb.x, rb.y, 30, W * 1.5); sndStart(); return; }
+      }
+      burst(p.x, p.y, 5, W * 0.55); sndTick();
+      return;
+    }
+
+    if (mode === 'stage') {
+      if (pressIdx >= 0) return;
+      for (var g = 0; g < STAGES.length; g++) {
+        var rg = stageBtnRect(g);
+        if (hitRect(p, rg)) { pressIdx = g; pressT = 0; burst(rg.x, rg.y, 30, W * 1.5); sndStart(); return; }
       }
       burst(p.x, p.y, 5, W * 0.55); sndTick();
       return;
@@ -774,14 +808,15 @@
     if (shake > 0) shake = Math.max(0, shake - dt * 3.0);
 
     // タイトル・モード選択
-    if (mode === 'title' || mode === 'select') {
+    if (mode === 'title' || mode === 'select' || mode === 'stage') {
       if (pressIdx >= 0) {
         pressT += dt;
         if (pressT > 0.5) {
           var idx = pressIdx;
           pressIdx = -1; pressT = 0;
-          if (mode === 'title') { mode = 'select'; }
-          else { players = (idx === 0) ? 1 : 2; newGame(); }
+          if (mode === 'title') mode = 'select';
+          else if (mode === 'select') { players = (idx === 0) ? 1 : 2; mode = 'stage'; }
+          else { stageIdx = idx; FLD = STAGES[idx].fld; layout(); newGame(); }
         }
       }
       return;
@@ -921,7 +956,8 @@
   }
 
   function drawField() {
-    if (imgs.field) { drawFitted(imgs.field, 'field', IMG, true); return; }
+    var fi = imgs['stage' + stageIdx];
+    if (fi) { drawFitted(fi, 'field' + stageIdx, IMG, true); return; }
     ctx.fillStyle = '#0b1b3a'; ctx.fillRect(0, 0, W, H);
     // 画像が読めていないあいだの代わり
     ctx.fillStyle = '#eaf4ff'; ctx.fillRect(0, 0, W, H);
@@ -1422,9 +1458,72 @@
     drawFloatBtn(imgs.duo,  modeBtnRect(1), t, 1.2, pressIdx === 1, 'ふたりで');
   }
 
+  function drawStage(t) {
+    drawTitleBg();
+    ctx.fillStyle = 'rgba(6,18,48,0.5)';
+    ctx.fillRect(0, 0, W, H);
+
+    // 見出し
+    var ti = imgs.ttlStage;
+    if (ti) {
+      var tw = Math.min(TIMG.w * 0.72, TIMG.h * 0.42);
+      var th = tw * ti.height / ti.width;
+      var maxTh = TIMG.h * 0.20;
+      if (th > maxTh) { th = maxTh; tw = th * ti.width / ti.height; }
+      ctx.drawImage(ti, TIMG.x + TIMG.w / 2 - tw / 2, TIMG.y + TIMG.h * 0.15 - th / 2, tw, th);
+    } else {
+      ctx.save();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      var fs = Math.min(TIMG.w * 0.1, TIMG.h * 0.055);
+      ctx.font = '900 ' + fs + SANS;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText('ステージ せんたく', TIMG.x + TIMG.w / 2, TIMG.y + TIMG.h * 0.15);
+      ctx.restore();
+    }
+
+    for (var i = 0; i < STAGES.length; i++) {
+      var r = stageBtnRect(i);
+      var img = imgs['stage' + i];
+      var bob = Math.sin(t * 1.7 + i * 0.8);
+      var y = r.y + bob * TIMG.h * 0.005;
+      var sc = 1, alpha = 1;
+      if (pressIdx === i) { sc = 1 + pressT * 1.6; alpha = Math.max(0, 1 - pressT / 0.42); }
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(r.x, y);
+      ctx.scale(sc, sc);
+      var rad = r.w * 0.12;
+      ctx.save();
+      roundRect(-r.w / 2, -r.h / 2, r.w, r.h, rad);
+      ctx.clip();
+      if (img) ctx.drawImage(img, -r.w / 2, -r.h / 2, r.w, r.h);
+      else { ctx.fillStyle = '#9fb2cf'; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, r.h); }
+      ctx.restore();
+      ctx.lineWidth = Math.max(3, r.w * 0.035);
+      ctx.strokeStyle = '#ffffff';
+      roundRect(-r.w / 2, -r.h / 2, r.w, r.h, rad);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    drawVersion();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
   function render(t) {
     if (mode === 'title')  { drawTitle(t);  drawParts(); return; }
     if (mode === 'select') { drawSelect(t); drawParts(); return; }
+    if (mode === 'stage')  { drawStage(t);  drawParts(); return; }
 
     ctx.save();
     if (shake > 0) {
