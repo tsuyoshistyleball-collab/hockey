@@ -1,11 +1,11 @@
 /* オフラインでも遊べるようにキャッシュする。
    中身を更新したら CACHE の番号と index.html の APP_VERSION を必ず上げること。 */
-var CACHE = 'hockey-v10';
+var CACHE = 'hockey-v11';
 
 var ASSETS = [
   './',
   './index.html',
-  './field.jpg',
+  './field-3.jpg',
   './title-bg.jpg',
   './side.jpg',
   './btn-start.png',
@@ -28,10 +28,18 @@ var ASSETS = [
   './icon-512-maskable-2.png'
 ];
 
+/* CACHE を上げたら、必ずサーバーから取り直す。
+   同じファイル名のまま絵を差し替えても、古いものが残らないようにするため。 */
 self.addEventListener('install', function (e) {
   e.waitUntil(
-    caches.open(CACHE).then(function (c) { return c.addAll(ASSETS); })
-      .then(function () { return self.skipWaiting(); })
+    caches.open(CACHE).then(function (c) {
+      return Promise.all(ASSETS.map(function (u) {
+        var bust = u + (u.indexOf('?') < 0 ? '?' : '&') + CACHE;
+        return fetch(bust, { cache: 'reload' }).then(function (res) {
+          if (res && res.ok) return c.put(u, res);      // 保存はきれいなURLで
+        }).catch(function () {});                       // 1つ失敗しても止めない
+      }));
+    }).then(function () { return self.skipWaiting(); })
   );
 });
 

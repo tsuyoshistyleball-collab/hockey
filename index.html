@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.3.0';
+  var APP_VERSION = '2.3.1';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -45,7 +45,7 @@
     i.onload = function () { imgs[key] = i; };
     i.src = src;
   }
-  loadImg('field',   'field.jpg');
+  loadImg('field',   'field-3.jpg');
   loadImg('bg',      'title-bg.jpg');
   loadImg('side',    'side.jpg');
   loadImg('jk0',     'jk-0.png');
@@ -105,12 +105,12 @@
   function titleBgm()  { playBgm('title',  'title.mp3',  0.5); }
   function battleBgm() { playBgm('battle', 'battle.mp3', 0.4); }
 
-  // field.jpg (970x1622) の中での氷の範囲・ゴールの幅・センターラインの位置
+  // field-3.jpg (970x1622) の中での氷の範囲・ゴールの幅・センターラインの位置
   // （すべて画像サイズに対する割合）
   var FLD = { x0:0.0680, x1:0.9278, y0:0.0826, y1:0.9223,
               mid:0.4926, goal:0.1629, circle:0.093 };
   var F = { x:0, y:0, w:0, h:0, cx:0, cy:0 };   // 盤面（氷）の位置
-  var IMG  = { x:0, y:0, w:0, h:0 };            // field.jpg を描く位置
+  var IMG  = { x:0, y:0, w:0, h:0 };            // field-3.jpg を描く位置
   var TIMG = { x:0, y:0, w:0, h:0 };            // title-bg.jpg を描く位置
   // 盤面の縦横比はこの範囲に収める。横に広い画面（タブレットや折りたたみ）では
   // 引き伸ばさず中央に置き、まわりは背景でうめる
