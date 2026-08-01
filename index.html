@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.6.0';
+  var APP_VERSION = '2.6.1';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -208,8 +208,8 @@
     F.cy = IMG.y + FLD.mid * IMG.h;   // 絵に描かれたセンターラインに合わせる
 
     var s = Math.min(F.w, F.h * 0.62);           // 大きさの基準
-    puck.r = s * 0.058;
-    mallets[0].r = mallets[1].r = s * 0.092;
+    puck.r = s * 0.051;
+    mallets[0].r = mallets[1].r = s * 0.081;
 
     var margin = F.x - IMG.x;                    // 盤の外枠の幅
     resetBtn.r = Math.min(margin * 0.42, s * 0.055);
