@@ -63,6 +63,14 @@
   var serveSide  = 0;        // パックを転がしてもらう側（点を入れられた方）
   var lastCount  = -1;
   var CD_STEP    = 0.8;      // カウント1つぶんの秒数
+
+  // じゃんけん（試合の最初だけ。勝った方がパックをもらえる）
+  var JK_EMOJI = ['✊', '✌️', '✋'];   // グー / チョキ / パー
+  var JK_BEATS = [1, 2, 0];                              // グー→チョキ→パー→グー
+  var jkPhase  = 'pick';     // 'pick' | 'show'
+  var jkChoice = [null, null];
+  var jkWinner = -1;
+  var JK_WAIT  = 8;          // 片方だけ選んで止まらないための待ち時間（秒）
   var showHint   = true;
   var idleTime   = 0;        // パックが止まっている時間
   var flash      = 0;        // ゴール時の画面フラッシュ
@@ -190,6 +198,22 @@
     // 勝ったときはお祝いを少し見せてからタップを受け付ける
     if (mode === 'win') { if (modeTimer > 1.6) newGame(); return; }
 
+    if (mode === 'janken') {
+      if (jkPhase !== 'pick') return;
+      var jside = p.y < H / 2 ? 1 : 0;
+      if (jkChoice[jside] !== null) return;      // 一度選んだら変えられない
+      for (var i = 0; i < 3; i++) {
+        var b = jkButtonPos(jside, i);
+        if (dist2(p.x, p.y, b.x, b.y) < b.r * b.r * 1.35) {
+          jkChoice[jside] = i;
+          beep(720, 0.09, 'square', 0.13);
+          if (jkChoice[0] !== null && jkChoice[1] !== null) resolveJanken();
+          break;
+        }
+      }
+      return;
+    }
+
     // リセットボタン（長押しで発動）
     if (dist2(p.x, p.y, resetBtn.x, resetBtn.y) < resetBtn.r * resetBtn.r * 2.2) {
       resetPid = e.pointerId; resetHold = 0;
@@ -233,6 +257,17 @@
     }
   }
 
+  // じゃんけんボタンの位置。上のプレイヤーからも同じ並びに見えるよう左右を反転する
+  function jkButtonPos(side, i) {
+    var r = Math.min(W * 0.115, H * 0.062);
+    var lx = (i - 1) * r * 2.75;
+    return {
+      x: W / 2 + (side === 0 ? lx : -lx),
+      y: side === 0 ? H * 0.75 : H * 0.25,
+      r: r
+    };
+  }
+
   function dist2(ax, ay, bx, by) {
     var dx = ax - bx, dy = ay - by;
     return dx * dx + dy * dy;
@@ -256,9 +291,23 @@
   function newGame() {
     score[0] = score[1] = 0;
     flash = 0; shake = 0;
-    serveSide = Math.random() < 0.5 ? 0 : 1;   // 最初はどちらかにランダムで
     placeAll();
-    startCount();
+    startJanken();          // 先行後攻はじゃんけんで決める
+  }
+
+  function startJanken() {
+    jkPhase = 'pick';
+    jkChoice = [null, null];
+    jkWinner = -1;
+    mode = 'janken'; modeTimer = 0;
+  }
+
+  function resolveJanken() {
+    var a = jkChoice[0], b = jkChoice[1];
+    jkWinner = (a === b) ? -1 : (JK_BEATS[a] === b ? 0 : 1);
+    jkPhase = 'show'; modeTimer = 0;
+    if (jkWinner < 0) beep(400, 0.16, 'triangle', 0.12);
+    else [660, 880].forEach(function (f, i) { beep(f, 0.18, 'square', 0.15, i * 0.11); });
   }
 
   function scoreGoal(side) {
@@ -398,6 +447,19 @@
       var n = 3 - Math.floor(modeTimer / CD_STEP);   // 3 → 2 → 1
       if (n !== lastCount && n >= 1) { lastCount = n; beep(620, 0.12, 'square', 0.14); }
       if (modeTimer >= CD_STEP * 3) serve();
+    } else if (mode === 'janken') {
+      modeTimer += dt;
+      if (jkPhase === 'pick') {
+        // 片方しか選ばないまま止まらないよう、待ちすぎたら自動で決める
+        if (modeTimer > JK_WAIT && (jkChoice[0] === null) !== (jkChoice[1] === null)) {
+          var s = jkChoice[0] === null ? 0 : 1;
+          jkChoice[s] = Math.floor(Math.random() * 3);
+          resolveJanken();
+        }
+      } else if (modeTimer > (jkWinner < 0 ? 1.4 : 1.9)) {
+        if (jkWinner < 0) { jkChoice = [null, null]; jkPhase = 'pick'; modeTimer = 0; }
+        else { serveSide = jkWinner; startCount(); }
+      }
     } else if (mode === 'win') {
       modeTimer += dt;
     }
@@ -621,6 +683,79 @@
     }
   }
 
+  // じゃんけん画面。上下それぞれの向きで同じものを描く
+  function drawJanken(t) {
+    ctx.fillStyle = 'rgba(10,25,55,0.58)';
+    ctx.fillRect(0, 0, W, H);
+
+    var g0 = jkButtonPos(0, 1);                 // 中央ボタン＝各陣の基準位置
+    var r  = g0.r;
+    var titleFs = Math.min(W * 0.078, H * 0.044);
+    var resFs   = Math.min(W * 0.115, H * 0.065);
+    var subFs   = Math.min(W * 0.055, H * 0.031);
+    var sans = 'px system-ui, -apple-system, "Hiragino Sans", sans-serif';
+    var emo  = 'px system-ui, -apple-system, "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+
+    for (var side = 0; side < 2; side++) {
+      ctx.save();
+      if (side === 0) ctx.translate(W / 2, H * 0.75);
+      else { ctx.translate(W / 2, H * 0.25); ctx.rotate(Math.PI); }
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      if (jkPhase === 'pick') {
+        ctx.font = '900 ' + titleFs + sans;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(jkChoice[side] === null ? 'じゃんけん…' : 'えらんだ！', 0, -r * 2.1);
+
+        if (jkChoice[side] === null) {
+          for (var i = 0; i < 3; i++) {
+            var lx = (i - 1) * r * 2.75;
+            var pulse = 1 + Math.sin(t * 3 + i * 0.7) * 0.03;
+            ctx.save();
+            ctx.translate(lx, 0);
+            ctx.scale(pulse, pulse);
+            ctx.fillStyle = 'rgba(255,255,255,0.95)';
+            ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+            ctx.font = (r * 1.15) + emo;
+            ctx.fillText(JK_EMOJI[i], 0, r * 0.04);
+            ctx.restore();
+          }
+        } else {
+          // 相手に見えないよう、選んだ手そのものは伏せる
+          ctx.fillStyle = 'rgba(255,255,255,0.95)';
+          ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+          ctx.font = '900 ' + (r * 1.2) + sans;
+          ctx.fillStyle = side === 0 ? COL.p1 : COL.p2;
+          ctx.fillText('✓', 0, r * 0.06);
+        }
+      } else {
+        // 結果発表
+        var pop = 1 + Math.max(0, 0.3 - modeTimer * 1.6);
+        ctx.save();
+        ctx.scale(pop, pop);
+        ctx.font = (r * 2.0) + emo;
+        ctx.fillText(JK_EMOJI[jkChoice[side]], 0, -r * 0.75);
+        ctx.restore();
+
+        var won = (jkWinner === side);
+        var msg = jkWinner < 0 ? 'あいこ！' : (won ? 'かち！' : 'まけ…');
+        ctx.font = '900 ' + resFs + sans;
+        ctx.lineWidth = resFs * 0.18;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineJoin = 'round';
+        ctx.strokeText(msg, 0, r * 1.3);
+        ctx.fillStyle = jkWinner < 0 ? '#5b7bb5' : (won ? (side === 0 ? COL.p1 : COL.p2) : '#9fb2cf');
+        ctx.fillText(msg, 0, r * 1.3);
+
+        ctx.font = '700 ' + subFs + sans;
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.fillText(jkWinner < 0 ? 'もういちど' : (won ? 'パックが くるよ' : ''), 0, r * 1.3 + resFs * 0.95);
+      }
+      ctx.restore();
+    }
+  }
+
   // 3・2・1 のカウントと、パックが転がっていく向きの矢印
   function drawCountdown(t) {
     var n = 3 - Math.floor(modeTimer / CD_STEP);
@@ -710,9 +845,11 @@
 
     drawRink();
     drawScore();
-    if (mode !== 'goal' || modeTimer < 0.9) drawPuck();
-    drawMallet(mallets[0]);
-    drawMallet(mallets[1]);
+    if (mode !== 'janken') {          // じゃんけん中は盤上を空にしておく
+      if (mode !== 'goal' || modeTimer < 0.9) drawPuck();
+      drawMallet(mallets[0]);
+      drawMallet(mallets[1]);
+    }
     drawResetBtn();   // マレットに隠れないよう最後に描く
 
     if (showHint && mode === 'play') drawHint(t);
@@ -726,6 +863,7 @@
       ctx.fillRect(0, 0, W, H);
     }
     if (mode === 'win') drawWin(t);
+    if (mode === 'janken') drawJanken(t);
     if (isLandscape()) drawRotateHint(t);
   }
 

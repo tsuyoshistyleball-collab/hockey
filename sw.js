@@ -1,5 +1,5 @@
 /* オフラインでも遊べるようにキャッシュする */
-var CACHE = 'hockey-v2';
+var CACHE = 'hockey-v3';
 var ASSETS = [
   './',
   './index.html',
