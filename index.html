@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.2.0';
+  var APP_VERSION = '2.3.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -105,8 +105,10 @@
   function titleBgm()  { playBgm('title',  'title.mp3',  0.5); }
   function battleBgm() { playBgm('battle', 'battle.mp3', 0.4); }
 
-  // field.jpg (972x1619) の中での氷の範囲とゴールの幅（画像サイズに対する割合）
-  var FLD = { x0:0.089, x1:0.910, y0:0.0927, y1:0.8968, goal:0.168, circle:0.0945 };
+  // field.jpg (970x1622) の中での氷の範囲・ゴールの幅・センターラインの位置
+  // （すべて画像サイズに対する割合）
+  var FLD = { x0:0.0680, x1:0.9278, y0:0.0826, y1:0.9223,
+              mid:0.4926, goal:0.1629, circle:0.093 };
   var F = { x:0, y:0, w:0, h:0, cx:0, cy:0 };   // 盤面（氷）の位置
   var IMG  = { x:0, y:0, w:0, h:0 };            // field.jpg を描く位置
   var TIMG = { x:0, y:0, w:0, h:0 };            // title-bg.jpg を描く位置
@@ -188,7 +190,7 @@
     F.x = IMG.x + FLD.x0 * IMG.w;  F.w = (FLD.x1 - FLD.x0) * IMG.w;
     F.y = IMG.y + FLD.y0 * IMG.h;  F.h = (FLD.y1 - FLD.y0) * IMG.h;
     F.cx = F.x + F.w / 2;
-    F.cy = F.y + F.h / 2;
+    F.cy = IMG.y + FLD.mid * IMG.h;   // 絵に描かれたセンターラインに合わせる
 
     var s = Math.min(F.w, F.h * 0.62);           // 大きさの基準
     puck.r = s * 0.058;
@@ -658,10 +660,14 @@
     puck.x = m.x + nx * min;
     puck.y = m.y + ny * min;
 
+    // マレットが動いているほどよく弾む（止まっていればほとんど弾まない）
+    var mSpeed = Math.sqrt(m.vx * m.vx + m.vy * m.vy);
+    var e = 0.35 + 0.35 * Math.min(1, mSpeed / (0.9 * F.w));
+
     var rvx = puck.vx - m.vx, rvy = puck.vy - m.vy;
     var vn = rvx * nx + rvy * ny;
     if (vn < 0) {
-      var j = -(1 + 0.92) * vn;
+      var j = -(1 + e) * vn;
       puck.vx += nx * j;
       puck.vy += ny * j;
     }
