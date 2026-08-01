@@ -57,9 +57,12 @@
   ];
 
   var score      = [0, 0];
-  var mode       = 'play';   // 'play' | 'goal' | 'win'
+  var mode       = 'count';  // 'count' | 'play' | 'goal' | 'win'
   var modeTimer  = 0;
   var goalSide   = 0;        // 得点したプレイヤー
+  var serveSide  = 0;        // パックを転がしてもらう側（点を入れられた方）
+  var lastCount  = -1;
+  var CD_STEP    = 0.8;      // カウント1つぶんの秒数
   var showHint   = true;
   var idleTime   = 0;        // パックが止まっている時間
   var flash      = 0;        // ゴール時の画面フラッシュ
@@ -71,6 +74,8 @@
   var RESET_HOLD = 0.9;
 
   // ---------------------------------------------------------------- 配置
+  var prevW = 0, prevH = 0;
+
   function layout() {
     var s = Math.min(W, H * 0.62);           // 大きさの基準
     puck.r     = s * 0.058;
@@ -78,7 +83,25 @@
     resetBtn.r = s * 0.055;
     resetBtn.x = resetBtn.r * 1.25;
     resetBtn.y = H / 2;
-    placeAll();
+
+    if (!prevW || !prevH) {
+      placeAll();
+    } else {
+      // 画面サイズが変わってもプレー中の位置関係を保つ
+      var sx = W / prevW, sy = H / prevH;
+      puck.x *= sx; puck.y *= sy;
+      puck.vx *= sx; puck.vy *= sy;
+      puck.x = Math.max(puck.r, Math.min(W - puck.r, puck.x));
+      puck.y = Math.max(puck.r, Math.min(H - puck.r, puck.y));
+      for (var i = 0; i < 2; i++) {
+        var m = mallets[i];
+        m.x *= sx; m.y *= sy; m.tx *= sx; m.ty *= sy;
+        clampTarget(m);
+        m.x = Math.max(m.r, Math.min(W - m.r, m.x));
+        m.y = Math.max(m.r, Math.min(H - m.r, m.y));
+      }
+    }
+    prevW = W; prevH = H;
   }
 
   function goalHalfWidth() { return Math.min(W * 0.24, H * 0.14); }
@@ -232,18 +255,34 @@
   // ---------------------------------------------------------------- 進行
   function newGame() {
     score[0] = score[1] = 0;
-    mode = 'play'; modeTimer = 0;
     flash = 0; shake = 0;
+    serveSide = Math.random() < 0.5 ? 0 : 1;   // 最初はどちらかにランダムで
     placeAll();
+    startCount();
   }
 
   function scoreGoal(side) {
     score[side]++;
     goalSide = side;
+    serveSide = 1 - side;      // 入れられた方から再開する
     flash = 1; shake = 1;
     puck.vx = puck.vy = 0;
     if (score[side] >= WIN_SCORE) { mode = 'win'; modeTimer = 0; sndWin(); }
     else                          { mode = 'goal'; modeTimer = 0; sndGoal(); }
+  }
+
+  function startCount() {
+    resetPuck();
+    mode = 'count'; modeTimer = 0; lastCount = -1;
+  }
+
+  // 点を入れられた方へ、ゆっくりパックを転がす
+  function serve() {
+    var dir = serveSide === 0 ? 1 : -1;        // side 0 は下側
+    puck.vx = (Math.random() - 0.5) * 0.14 * W;
+    puck.vy = dir * 0.42 * W;
+    mode = 'play'; modeTimer = 0;
+    beep(990, 0.18, 'square', 0.16);
   }
 
   // ---------------------------------------------------------------- 物理
@@ -353,7 +392,12 @@
 
     if (mode === 'goal') {
       modeTimer += dt;
-      if (modeTimer > 1.1) { mode = 'play'; modeTimer = 0; resetPuck(); }
+      if (modeTimer > 1.1) startCount();
+    } else if (mode === 'count') {
+      modeTimer += dt;
+      var n = 3 - Math.floor(modeTimer / CD_STEP);   // 3 → 2 → 1
+      if (n !== lastCount && n >= 1) { lastCount = n; beep(620, 0.12, 'square', 0.14); }
+      if (modeTimer >= CD_STEP * 3) serve();
     } else if (mode === 'win') {
       modeTimer += dt;
     }
@@ -577,6 +621,48 @@
     }
   }
 
+  // 3・2・1 のカウントと、パックが転がっていく向きの矢印
+  function drawCountdown(t) {
+    var n = 3 - Math.floor(modeTimer / CD_STEP);
+    if (n < 1) n = 1;
+    var k = (modeTimer % CD_STEP) / CD_STEP;          // 0→1 で1カウント
+    var pop = 1 + Math.max(0, 0.35 - k * 1.4);        // 出た瞬間だけ少し大きく
+    var col = serveSide === 0 ? COL.p1 : COL.p2;
+    var fs = Math.min(W * 0.24, H * 0.13);
+
+    // 受け取る側を指す矢印
+    var dir = serveSide === 0 ? 1 : -1;
+    var ax = W / 2, ay = H / 2 + dir * (centerR() + puck.r * 1.6);
+    var aw = puck.r * 1.1, ah = puck.r * 1.2;
+    ctx.save();
+    ctx.globalAlpha = 0.35 + Math.sin(t * 5) * 0.25;
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay + dir * ah);
+    ctx.lineTo(ax - aw, ay);
+    ctx.lineTo(ax + aw, ay);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    for (var side = 0; side < 2; side++) {
+      ctx.save();
+      if (side === 0) ctx.translate(W / 2, H * 0.685);
+      else { ctx.translate(W / 2, H * 0.315); ctx.rotate(Math.PI); }
+      ctx.scale(pop, pop);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '900 ' + fs + 'px system-ui, -apple-system, "Hiragino Sans", sans-serif';
+      ctx.lineWidth = fs * 0.14;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineJoin = 'round';
+      ctx.strokeText(n, 0, 0);
+      ctx.fillStyle = side === 0 ? COL.p1 : COL.p2;
+      ctx.fillText(n, 0, 0);
+      ctx.restore();
+    }
+  }
+
   function drawWin(t) {
     ctx.fillStyle = 'rgba(10,25,55,0.55)';
     ctx.fillRect(0, 0, W, H);
@@ -631,6 +717,7 @@
 
     if (showHint && mode === 'play') drawHint(t);
     if (mode === 'goal') drawGoalBanner();
+    if (mode === 'count') drawCountdown(t);
 
     ctx.restore();
 
@@ -678,6 +765,7 @@
   window.addEventListener('resize', resize);
   window.addEventListener('orientationchange', function () { setTimeout(resize, 200); });
   resize();
+  newGame();
   requestAnimationFrame(frame);
 
   if ('serviceWorker' in navigator) {
