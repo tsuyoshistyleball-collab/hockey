@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.0.0';
+  var APP_VERSION = '2.1.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -50,36 +50,65 @@
   loadImg('start',   'btn-start.png');
   loadImg('solo',    'btn-solo.png');
   loadImg('duo',     'btn-duo.png');
+  loadImg('goal',    'goal.png');
+  loadImg('num1',    'num-1.png');
+  loadImg('num2',    'num-2.png');
+  loadImg('num3',    'num-3.png');
   loadImg('malletR', 'mallet-red.png');
   loadImg('malletB', 'mallet-blue.png');
   loadImg('puck',    'puck.png');
 
-  // ---------------------------------------------------------------- タイトルの音楽
-  var bgm = null;
-  function playBgm() {
-    if (!bgm) {
-      bgm = new Audio('title.mp3');
-      bgm.loop = true;
-      bgm.volume = 0.5;
+  // ---------------------------------------------------------------- 音楽
+  var tracks = {};
+  var curTrack = null;
+
+  function playBgm(key, src, vol) {
+    if (curTrack === key) {
+      var cur = tracks[key];
+      if (cur && cur.paused) {
+        cur.volume = vol;
+        var q0 = cur.play();
+        if (q0 && q0.catch) q0.catch(function () {});
+      }
+      return;
     }
-    var q = bgm.play();
+    fadeOutBgm();
+    if (!tracks[key]) {
+      var a = new Audio(src);
+      a.loop = true;
+      tracks[key] = a;
+    }
+    tracks[key].volume = vol;
+    curTrack = key;
+    var q = tracks[key].play();
     if (q && q.catch) q.catch(function () {});   // 自動再生が止められても気にしない
   }
-  function stopBgm() {
-    if (!bgm || bgm.paused) return;
-    var v = bgm.volume;
+
+  function fadeOutBgm() {
+    var key = curTrack;
+    if (!key) return;
+    curTrack = null;
+    var a = tracks[key];
+    if (!a || a.paused) return;
+    var v = a.volume;
     var id = setInterval(function () {           // ふわっと止める
-      v -= 0.05;
-      if (v <= 0) {
-        clearInterval(id);
-        bgm.pause(); bgm.currentTime = 0; bgm.volume = 0.5;
-      } else bgm.volume = v;
+      v -= 0.06;
+      if (v <= 0) { clearInterval(id); a.pause(); a.currentTime = 0; }
+      else a.volume = v;
     }, 40);
   }
+
+  function titleBgm()  { playBgm('title',  'title.mp3',  0.5); }
+  function battleBgm() { playBgm('battle', 'battle.mp3', 0.4); }
 
   // field.jpg (972x1619) の中での氷の範囲とゴールの幅（画像サイズに対する割合）
   var FLD = { x0:0.089, x1:0.910, y0:0.0927, y1:0.8968, goal:0.2222, circle:0.0945 };
   var F = { x:0, y:0, w:0, h:0, cx:0, cy:0 };   // 盤面（氷）の位置
+  var IMG  = { x:0, y:0, w:0, h:0 };            // field.jpg を描く位置
+  var TIMG = { x:0, y:0, w:0, h:0 };            // title-bg.jpg を描く位置
+  // 盤面の縦横比はこの範囲に収める。横に広い画面（タブレットや折りたたみ）では
+  // 引き伸ばさず中央に置き、まわりは背景でうめる
+  var AR_MAX = 0.60, AR_MIN = 0.40;
 
   // ---------------------------------------------------------------- 見た目
   var COL = {
@@ -132,15 +161,28 @@
   var JK_WAIT  = 8;          // 片方だけ選んで止まらないための待ち時間（秒）
 
   // コンピューター（4歳児が勝てるようにかなり弱くしている）
-  var AI_SPEED = 0.95;       // 画面幅/秒（人は 3.0）
+  var AI_SPEED = 1.16;       // 盤面の幅/秒（人は 3.65）
   var ai = { think:0, errX:0, rest:0, jkT:0 };
 
   // ---------------------------------------------------------------- 配置
-  var prevW = 0, prevH = 0;
+  var prevW = 0, prevH = 0, prevX = 0, prevY = 0;
+
+  // 画面の形に合わせて、絵を置く矩形を決める。
+  // 縦長の画面はいっぱいに広げ、横に広い画面では中央に寄せて左右をあける
+  function fitRect(rect, arMax, arMin) {
+    var w = Math.min(W, H * arMax);
+    var h = Math.min(H, w / arMin);
+    rect.w = w; rect.h = h;
+    rect.x = (W - w) / 2;
+    rect.y = (H - h) / 2;
+  }
 
   function layout() {
-    F.x = FLD.x0 * W;  F.w = (FLD.x1 - FLD.x0) * W;
-    F.y = FLD.y0 * H;  F.h = (FLD.y1 - FLD.y0) * H;
+    fitRect(IMG, AR_MAX, AR_MIN);
+    fitRect(TIMG, 0.72, 0.42);
+
+    F.x = IMG.x + FLD.x0 * IMG.w;  F.w = (FLD.x1 - FLD.x0) * IMG.w;
+    F.y = IMG.y + FLD.y0 * IMG.h;  F.h = (FLD.y1 - FLD.y0) * IMG.h;
     F.cx = F.x + F.w / 2;
     F.cy = F.y + F.h / 2;
 
@@ -148,33 +190,37 @@
     puck.r = s * 0.058;
     mallets[0].r = mallets[1].r = s * 0.092;
 
-    resetBtn.r = Math.min(F.x * 0.42, s * 0.055);
-    resetBtn.x = F.x * 0.5;
+    var margin = F.x - IMG.x;                    // 盤の外枠の幅
+    resetBtn.r = Math.min(margin * 0.42, s * 0.055);
+    resetBtn.x = IMG.x + margin * 0.5;
     resetBtn.y = F.cy;
 
     if (!prevW || !prevH) {
       placeAll();
     } else {
       // 画面サイズが変わってもプレー中の位置関係を保つ
-      var sx = W / prevW, sy = H / prevH;
-      puck.x *= sx; puck.y *= sy;
+      var sx = F.w / prevW, sy = F.h / prevH;
+      puck.x = F.x + (puck.x - prevX) * sx;
+      puck.y = F.y + (puck.y - prevY) * sy;
       puck.vx *= sx; puck.vy *= sy;
       puck.x = clamp(puck.x, F.x + puck.r, F.x + F.w - puck.r);
       puck.y = clamp(puck.y, F.y + puck.r, F.y + F.h - puck.r);
       for (var i = 0; i < 2; i++) {
         var m = mallets[i];
-        m.x *= sx; m.y *= sy; m.tx *= sx; m.ty *= sy;
+        m.x  = F.x + (m.x  - prevX) * sx;  m.y  = F.y + (m.y  - prevY) * sy;
+        m.tx = F.x + (m.tx - prevX) * sx;  m.ty = F.y + (m.ty - prevY) * sy;
         clampTarget(m);
         m.x = clamp(m.x, F.x + m.r, F.x + F.w - m.r);
         m.y = clamp(m.y, F.y + m.r, F.y + F.h - m.r);
       }
     }
-    prevW = W; prevH = H;
+    prevW = F.w; prevH = F.h; prevX = F.x; prevY = F.y;
   }
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
-  function goalHalfWidth()  { return FLD.goal * W; }
-  function isLandscape()    { return W > H * 1.15; }   // 縦向き専用のゲーム
+  function goalHalfWidth()  { return FLD.goal * IMG.w; }
+  // 小さい画面の横持ちだけ、たてむきを案内する（タブレットはそのまま遊べる）
+  function isLandscape()    { return W > H * 1.15 && H < 500; }
 
   function placeAll() {
     resetPuck();
@@ -239,6 +285,48 @@
   function sndGoal()      { [523, 659, 784, 1047].forEach(function (f, i) { beep(f, 0.20, 'square', 0.15, i * 0.09); }); }
   function sndWin()       { [523, 659, 784, 1047, 784, 1047, 1319].forEach(function (f, i) { beep(f, 0.26, 'square', 0.16, i * 0.13); }); }
   function sndStart()     { [523, 784, 1047].forEach(function (f, i) { beep(f, 0.17, 'square', 0.16, i * 0.07); }); }
+
+  // 開始の合図「ピー！」
+  function sndWhistle() {
+    var a = audio();
+    if (!a) return;
+    var t = a.currentTime, dur = 0.55;
+    var g = a.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.2, t + 0.03);
+    g.gain.setValueAtTime(0.2, t + dur - 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    g.connect(a.destination);
+
+    [2050, 2560].forEach(function (f, i) {
+      var o = a.createOscillator();
+      o.type = i === 0 ? 'sine' : 'triangle';
+      o.frequency.setValueAtTime(f * 0.94, t);
+      o.frequency.linearRampToValueAtTime(f, t + 0.07);
+      var lfo = a.createOscillator(), lg = a.createGain();
+      lfo.frequency.value = 26;                  // 笛のころころした震え
+      lg.gain.value = f * 0.022;
+      lfo.connect(lg); lg.connect(o.frequency);
+      var og = a.createGain();
+      og.gain.value = i === 0 ? 0.85 : 0.3;
+      o.connect(og); og.connect(g);
+      o.start(t); o.stop(t + dur + 0.02);
+      lfo.start(t); lfo.stop(t + dur + 0.02);
+    });
+
+    // 息のノイズをすこし混ぜる
+    var len = Math.floor(a.sampleRate * dur);
+    var buf = a.createBuffer(1, len, a.sampleRate);
+    var ch = buf.getChannelData(0);
+    for (var i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
+    var src = a.createBufferSource();
+    src.buffer = buf;
+    var bp = a.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 2400; bp.Q.value = 2.5;
+    var ng = a.createGain(); ng.gain.value = 0.1;
+    src.connect(bp); bp.connect(ng); ng.connect(g);
+    src.start(t); src.stop(t + dur);
+  }
   function sndTick()      { beep(880, 0.05, 'sine', 0.07); }
 
   // ---------------------------------------------------------------- 入力
@@ -259,7 +347,7 @@
 
   // じゃんけんボタンの位置。上のプレイヤーからも同じ並びに見えるよう左右を反転する
   function jkButtonPos(side, i) {
-    var r = Math.min(W * 0.115, H * 0.062);
+    var r = Math.min(IMG.w * 0.115, IMG.h * 0.062);
     var lx = (i - 1) * r * 2.75;
     return {
       x: F.cx + (side === 0 ? lx : -lx),
@@ -271,25 +359,26 @@
   function startBtnRect() {
     var img = imgs.start;
     var ar = img ? img.height / img.width : 0.25;
-    var w = W * 0.80, h = w * ar;
-    var maxH = H * 0.13;
+    var w = TIMG.w * 0.80, h = w * ar;
+    var maxH = TIMG.h * 0.13;
     if (h > maxH) { h = maxH; w = h / ar; }
-    return { x: W / 2, y: H * 0.795, w: w, h: h };
+    return { x: TIMG.x + TIMG.w / 2, y: TIMG.y + TIMG.h * 0.795, w: w, h: h };
   }
 
   function modeBtnRect(i) {          // 0 = ひとり(左) / 1 = ふたり(右)
     var img = i === 0 ? imgs.solo : imgs.duo;
     var ar = img ? img.height / img.width : 0.58;
-    var w = W * 0.475, h = w * ar;
-    var maxH = H * 0.19;
+    var w = TIMG.w * 0.475, h = w * ar;
+    var maxH = TIMG.h * 0.19;
     if (h > maxH) { h = maxH; w = h / ar; }
-    return { x: i === 0 ? W * 0.262 : W * 0.738, y: H * 0.76, w: w, h: h };
+    return { x: TIMG.x + TIMG.w * (i === 0 ? 0.262 : 0.738),
+             y: TIMG.y + TIMG.h * 0.76, w: w, h: h };
   }
 
   function onDown(e) {
     audio();
     var p = pointerPos(e);
-    if (mode === 'title' || mode === 'select') playBgm();
+    if (mode === 'title' || mode === 'select') titleBgm();
 
     if (mode === 'title') {
       if (pressIdx >= 0) return;
@@ -391,6 +480,7 @@
   function newGame() {
     score[0] = score[1] = 0;
     flash = 0; shake = 0;
+    battleBgm();
     placeAll();
     startJanken();          // 先行後攻はじゃんけんで決める
   }
@@ -411,11 +501,14 @@
     else [660, 880].forEach(function (f, i) { beep(f, 0.18, 'square', 0.15, i * 0.11); });
   }
 
+  var GOAL_TIME = 1.6;       // ゴール演出の長さ（秒）
+
   function scoreGoal(side) {
     score[side]++;
     goalSide = side;
     serveSide = 1 - side;      // 入れられた方から再開する
     flash = 1; shake = 1;
+    burst(F.cx, side === 0 ? F.y : F.y + F.h, 36, F.w * 1.9);   // ゴール口からはじける
     puck.vx = puck.vy = 0;
     if (score[side] >= WIN_SCORE) { mode = 'win'; modeTimer = 0; sndWin(); }
     else                          { mode = 'goal'; modeTimer = 0; sndGoal(); }
@@ -429,10 +522,10 @@
   // 点を入れられた方へ、ゆっくりパックを転がす
   function serve() {
     var dir = serveSide === 0 ? 1 : -1;        // side 0 は下側
-    puck.vx = (Math.random() - 0.5) * 0.14 * W;
-    puck.vy = dir * 0.42 * W;
+    puck.vx = (Math.random() - 0.5) * 0.17 * F.w;
+    puck.vy = dir * 0.51 * F.w;
     mode = 'play'; modeTimer = 0;
-    beep(990, 0.18, 'square', 0.16);
+    sndWhistle();
   }
 
   // ---------------------------------------------------------------- 粒
@@ -495,12 +588,12 @@
   }
 
   // ---------------------------------------------------------------- 物理
-  var MAL_SPEED   = 3.0;    // 画面幅/秒
-  var PUCK_MAX    = 1.55;
+  var MAL_SPEED   = 3.65;   // 盤面の幅/秒
+  var PUCK_MAX    = 1.89;
   var WALL_BOUNCE = 0.93;
 
   function stepMallet(m, sdt) {
-    var maxV = (m.side === 1 && players === 1 ? AI_SPEED : MAL_SPEED) * W;
+    var maxV = (m.side === 1 && players === 1 ? AI_SPEED : MAL_SPEED) * F.w;
     var dx = m.tx - m.x, dy = m.ty - m.y;
     var d = Math.sqrt(dx * dx + dy * dy);
     var step = maxV * sdt;
@@ -568,13 +661,13 @@
 
     // 弱すぎる当たりでも必ず少し動くように
     var sp = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
-    var minSp = 0.28 * W;
+    var minSp = 0.34 * F.w;
     if (sp < minSp) {
       if (sp < 1) { puck.vx = nx * minSp; puck.vy = ny * minSp; }
       else        { puck.vx = puck.vx / sp * minSp; puck.vy = puck.vy / sp * minSp; }
       sp = minSp;
     }
-    var power = Math.min(1, sp / (PUCK_MAX * W));
+    var power = Math.min(1, sp / (PUCK_MAX * F.w));
     sndHit(power);
     buzz(power);
   }
@@ -587,7 +680,7 @@
 
   function clampPuckSpeed() {
     var sp = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
-    var max = PUCK_MAX * W;
+    var max = PUCK_MAX * F.w;
     if (sp > max) { puck.vx = puck.vx / sp * max; puck.vy = puck.vy / sp * max; }
   }
 
@@ -605,7 +698,7 @@
           var idx = pressIdx;
           pressIdx = -1; pressT = 0;
           if (mode === 'title') { mode = 'select'; }
-          else { players = (idx === 0) ? 1 : 2; stopBgm(); newGame(); }
+          else { players = (idx === 0) ? 1 : 2; newGame(); }
         }
       }
       return;
@@ -622,7 +715,7 @@
 
     if (mode === 'goal') {
       modeTimer += dt;
-      if (modeTimer > 1.1) startCount();
+      if (modeTimer > GOAL_TIME) startCount();
     } else if (mode === 'count') {
       modeTimer += dt;
       var n = 3 - Math.floor(modeTimer / CD_STEP);   // 3 → 2 → 1
@@ -668,10 +761,10 @@
       var f = Math.pow(0.78, dt);
       puck.vx *= f; puck.vy *= f;
       var sp = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
-      if (sp < 0.01 * W) { puck.vx = puck.vy = 0; }
+      if (sp < 0.012 * F.w) { puck.vx = puck.vy = 0; }
 
       // 隅で止まってしまったら真ん中に戻す（子ども向けの救済）
-      if (sp < 0.05 * W) {
+      if (sp < 0.06 * F.w) {
         idleTime += dt;
         if (idleTime > 4) resetPuck();
       } else idleTime = 0;
@@ -682,14 +775,35 @@
   }
 
   // ---------------------------------------------------------------- 描画
-  function drawCover(img) {
-    var s = Math.max(W / img.width, H / img.height);
-    var w = img.width * s, h = img.height * s;
-    ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+  // 画面と絵の形が違うとき、まわりを絵のぼかしでうめる
+  var bdCache = {};
+  function drawBackdrop(img, key) {
+    var c = bdCache[key];
+    if (!c || c.w !== W || c.h !== H) {
+      var sw = Math.max(8, Math.round(W / 12)), sh = Math.max(8, Math.round(H / 12));
+      var cv = document.createElement('canvas');
+      cv.width = sw; cv.height = sh;
+      var cx = cv.getContext('2d');
+      var s = Math.max(sw / img.width, sh / img.height);
+      cx.drawImage(img, (sw - img.width * s) / 2, (sh - img.height * s) / 2,
+                   img.width * s, img.height * s);
+      c = bdCache[key] = { cv: cv, w: W, h: H };
+    }
+    ctx.drawImage(c.cv, 0, 0, W, H);
+    ctx.fillStyle = 'rgba(6,16,42,0.5)';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function drawFitted(img, key, rect) {
+    ctx.fillStyle = '#0b1b3a';
+    ctx.fillRect(0, 0, W, H);
+    if (rect.w < W - 1 || rect.h < H - 1) drawBackdrop(img, key);
+    ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h);
   }
 
   function drawField() {
-    if (imgs.field) { ctx.drawImage(imgs.field, 0, 0, W, H); return; }
+    if (imgs.field) { drawFitted(imgs.field, 'field', IMG); return; }
+    ctx.fillStyle = '#0b1b3a'; ctx.fillRect(0, 0, W, H);
     // 画像が読めていないあいだの代わり
     ctx.fillStyle = '#eaf4ff'; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = 'rgba(255,90,120,0.14)'; ctx.fillRect(F.x, F.y, F.w, F.h / 2);
@@ -701,10 +815,10 @@
   }
 
   function drawScore() {
-    var r = Math.min(W, H) * 0.019;
+    var r = Math.min(IMG.w, IMG.h) * 0.019;
     var gap = r * 2.9;
     var total = (WIN_SCORE - 1) * gap;
-    var off = FLD.circle * H + r * 2.6;      // センターサークルの外側に置く
+    var off = FLD.circle * IMG.h + r * 2.6;      // センターサークルの外側に置く
 
     for (var side = 0; side < 2; side++) {
       var y = side === 0 ? F.cy + off : F.cy - off;
@@ -824,7 +938,7 @@
 
   function drawHint(t) {
     var pulse = 0.72 + Math.sin(t * 3.4) * 0.28;
-    var fs = Math.min(W * 0.075, H * 0.042);
+    var fs = Math.min(IMG.w * 0.075, IMG.h * 0.042);
     ctx.save();
     ctx.globalAlpha = pulse;
     ctx.textAlign = 'center';
@@ -851,11 +965,43 @@
   }
 
   // 2人が向かい合って見るので、上下それぞれの向きで表示する
+  function easeOutBack(k) {
+    var p = k - 1;
+    return 1 + 2.70158 * p * p * p + 1.70158 * p * p;
+  }
+
+  // 勢いよく飛び出して、少し揺れてから消える
+  function drawGoalImage(img) {
+    var k = Math.min(1, modeTimer / 0.34);
+    var scale = 0.3 + 0.7 * easeOutBack(k);
+    var wob = Math.sin(modeTimer * 17) * 0.05 * Math.max(0, 1 - modeTimer * 2.4);
+    var fade = 0.26;
+    var alpha = modeTimer > GOAL_TIME - fade
+      ? Math.max(0, (GOAL_TIME - modeTimer) / fade) : 1;
+
+    var w = Math.min(IMG.w * 0.86, IMG.h * 0.46);
+    var h = w * img.height / img.width;
+
+    for (var side = 0; side < 2; side++) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      if (side === 0) ctx.translate(F.cx, F.y + F.h * 0.70);
+      else { ctx.translate(F.cx, F.y + F.h * 0.30); ctx.rotate(Math.PI); }
+      ctx.scale(scale, scale);
+      ctx.rotate(wob);
+      ctx.drawImage(img, -w / 2, -h / 2, w, h);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   function drawGoalBanner() {
+    if (imgs.goal) { drawGoalImage(imgs.goal); return; }
+
     var k = Math.min(1, modeTimer / 0.22);
     var scale = 0.6 + k * 0.4;
     var col = goalSide === 0 ? COL.p1 : COL.p2;
-    var fs = Math.min(W * 0.17, H * 0.085);
+    var fs = Math.min(IMG.w * 0.17, IMG.h * 0.085);
 
     for (var side = 0; side < 2; side++) {
       ctx.save();
@@ -882,9 +1028,9 @@
     ctx.fillRect(0, 0, W, H);
 
     var r = jkButtonPos(0, 1).r;
-    var titleFs = Math.min(W * 0.078, H * 0.044);
-    var resFs   = Math.min(W * 0.115, H * 0.065);
-    var subFs   = Math.min(W * 0.055, H * 0.031);
+    var titleFs = Math.min(IMG.w * 0.078, IMG.h * 0.044);
+    var resFs   = Math.min(IMG.w * 0.115, IMG.h * 0.065);
+    var subFs   = Math.min(IMG.w * 0.055, IMG.h * 0.031);
 
     for (var side = 0; side < 2; side++) {
       ctx.save();
@@ -958,12 +1104,12 @@
     var n = 3 - Math.floor(modeTimer / CD_STEP);
     if (n < 1) n = 1;
     var k = (modeTimer % CD_STEP) / CD_STEP;
-    var pop = 1 + Math.max(0, 0.35 - k * 1.4);
+    var pop = 1 + Math.max(0, 0.45 - k * 1.7);
     var col = serveSide === 0 ? COL.p1 : COL.p2;
-    var fs = Math.min(W * 0.24, H * 0.13);
+    var fs = Math.min(IMG.w * 0.24, IMG.h * 0.13);
 
     var dir = serveSide === 0 ? 1 : -1;
-    var ax = F.cx, ay = F.cy + dir * (FLD.circle * H + puck.r * 1.6);
+    var ax = F.cx, ay = F.cy + dir * (FLD.circle * IMG.h + puck.r * 1.6);
     var aw = puck.r * 1.1, ah = puck.r * 1.2;
     ctx.save();
     ctx.globalAlpha = 0.4 + Math.sin(t * 5) * 0.25;
@@ -976,20 +1122,28 @@
     ctx.fill();
     ctx.restore();
 
+    var img = imgs['num' + n];
+    var ih = Math.min(IMG.h * 0.155, IMG.w * 0.30);
+    var iw = img ? ih * img.width / img.height : 0;
+
     for (var side = 0; side < 2; side++) {
       ctx.save();
       if (side === 0) ctx.translate(F.cx, F.y + F.h * 0.685);
       else { ctx.translate(F.cx, F.y + F.h * 0.315); ctx.rotate(Math.PI); }
       ctx.scale(pop, pop);
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.font = '900 ' + fs + SANS;
-      ctx.lineWidth = fs * 0.14;
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineJoin = 'round';
-      ctx.strokeText(n, 0, 0);
-      ctx.fillStyle = side === 0 ? COL.p1 : COL.p2;
-      ctx.fillText(n, 0, 0);
+      if (img) {
+        ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih);
+      } else {
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = '900 ' + fs + SANS;
+        ctx.lineWidth = fs * 0.14;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineJoin = 'round';
+        ctx.strokeText(n, 0, 0);
+        ctx.fillStyle = side === 0 ? COL.p1 : COL.p2;
+        ctx.fillText(n, 0, 0);
+      }
       ctx.restore();
     }
   }
@@ -999,10 +1153,10 @@
     ctx.fillRect(0, 0, W, H);
 
     var col = goalSide === 0 ? COL.p1 : COL.p2;
-    var bounce = Math.sin(t * 4) * (Math.min(W, H) * 0.02);
-    var ef = Math.min(W * 0.22, H * 0.13);
-    var fs = Math.min(W * 0.11, H * 0.062);
-    var ss = Math.min(W * 0.058, H * 0.032);
+    var bounce = Math.sin(t * 4) * (Math.min(IMG.w, IMG.h) * 0.02);
+    var ef = Math.min(IMG.w * 0.22, IMG.h * 0.13);
+    var fs = Math.min(IMG.w * 0.11, IMG.h * 0.062);
+    var ss = Math.min(IMG.w * 0.058, IMG.h * 0.032);
 
     for (var side = 0; side < 2; side++) {
       var won = (goalSide === side);
@@ -1056,7 +1210,7 @@
   // ---------------------------------------------------------------- タイトル
   function drawFloatBtn(img, rect, t, phase, pressed, label) {
     var bob = Math.sin(t * 1.8 + phase);
-    var y = rect.y + bob * H * 0.011;
+    var y = rect.y + bob * TIMG.h * 0.011;
     var sc = 1, alpha = 1;
     if (pressed) { sc = 1 + pressT * 1.9; alpha = Math.max(0, 1 - pressT / 0.42); }
 
@@ -1096,7 +1250,7 @@
   }
 
   function drawTitleBg() {
-    if (imgs.bg) { drawCover(imgs.bg); return; }
+    if (imgs.bg) { drawFitted(imgs.bg, 'title', TIMG); return; }
     var grd = ctx.createLinearGradient(0, 0, 0, H);
     grd.addColorStop(0, '#0b2a6b');
     grd.addColorStop(1, '#08町'.length ? '#0a1740' : '#0a1740');
@@ -1133,18 +1287,6 @@
     ctx.fillStyle = 'rgba(6,18,48,0.42)';
     ctx.fillRect(0, 0, W, H);
 
-    ctx.save();
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    var fs = Math.min(W * 0.085, H * 0.048);
-    ctx.font = '900 ' + fs + SANS;
-    ctx.lineWidth = fs * 0.2;
-    ctx.strokeStyle = 'rgba(10,30,70,0.9)';
-    ctx.lineJoin = 'round';
-    ctx.strokeText('どっちで あそぶ？', W / 2, H * 0.60);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText('どっちで あそぶ？', W / 2, H * 0.60);
-    ctx.restore();
-
     drawFloatBtn(imgs.solo, modeBtnRect(0), t, 0,   pressIdx === 0, 'ひとりで');
     drawFloatBtn(imgs.duo,  modeBtnRect(1), t, 1.2, pressIdx === 1, 'ふたりで');
   }
@@ -1155,14 +1297,14 @@
 
     ctx.save();
     if (shake > 0) {
-      var a = shake * Math.min(W, H) * 0.012;
+      var a = shake * Math.min(IMG.w, IMG.h) * 0.012;
       ctx.translate((Math.random() - 0.5) * a, (Math.random() - 0.5) * a);
     }
 
     drawField();
     drawScore();
     if (mode !== 'janken') {          // じゃんけん中は盤上を空にしておく
-      if (mode !== 'goal' || modeTimer < 0.9) drawPuck();
+      if (mode !== 'goal' || modeTimer < 0.85) drawPuck();
       drawMallet(mallets[0]);
       drawMallet(mallets[1]);
     }
@@ -1198,7 +1340,7 @@
   window.addEventListener('resize', resize);
   window.addEventListener('orientationchange', function () { setTimeout(resize, 200); });
   resize();
-  playBgm();          // 自動再生が許されていれば、タイトルから音楽が鳴る
+  titleBgm();         // 自動再生が許されていれば、タイトルから音楽が鳴る
   requestAnimationFrame(frame);
 
   // ---------------------------------------------------------------- 自動更新
