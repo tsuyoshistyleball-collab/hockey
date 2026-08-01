@@ -1,12 +1,13 @@
 /* オフラインでも遊べるようにキャッシュする。
    中身を更新したら CACHE の番号と index.html の APP_VERSION を必ず上げること。 */
-var CACHE = 'hockey-v6';
+var CACHE = 'hockey-v9';
 
 var ASSETS = [
   './',
   './index.html',
   './field.jpg',
   './title-bg.jpg',
+  './side.jpg',
   './btn-start.png',
   './btn-solo.png',
   './btn-duo.png',
@@ -19,6 +20,9 @@ var ASSETS = [
   './num-1.png',
   './num-2.png',
   './num-3.png',
+  './jk-0.png',
+  './jk-1.png',
+  './jk-2.png',
   './icon-192-2.png',
   './icon-512-2.png',
   './icon-512-maskable-2.png'

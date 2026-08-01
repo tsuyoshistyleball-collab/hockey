@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.1.0';
+  var APP_VERSION = '2.2.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -47,6 +47,10 @@
   }
   loadImg('field',   'field.jpg');
   loadImg('bg',      'title-bg.jpg');
+  loadImg('side',    'side.jpg');
+  loadImg('jk0',     'jk-0.png');
+  loadImg('jk1',     'jk-1.png');
+  loadImg('jk2',     'jk-2.png');
   loadImg('start',   'btn-start.png');
   loadImg('solo',    'btn-solo.png');
   loadImg('duo',     'btn-duo.png');
@@ -102,7 +106,7 @@
   function battleBgm() { playBgm('battle', 'battle.mp3', 0.4); }
 
   // field.jpg (972x1619) の中での氷の範囲とゴールの幅（画像サイズに対する割合）
-  var FLD = { x0:0.089, x1:0.910, y0:0.0927, y1:0.8968, goal:0.2222, circle:0.0945 };
+  var FLD = { x0:0.089, x1:0.910, y0:0.0927, y1:0.8968, goal:0.168, circle:0.0945 };
   var F = { x:0, y:0, w:0, h:0, cx:0, cy:0 };   // 盤面（氷）の位置
   var IMG  = { x:0, y:0, w:0, h:0 };            // field.jpg を描く位置
   var TIMG = { x:0, y:0, w:0, h:0 };            // title-bg.jpg を描く位置
@@ -280,8 +284,8 @@
     o.connect(g); g.connect(a.destination);
     o.start(t); o.stop(t + dur + 0.03);
   }
-  function sndHit(power)  { beep(320 + power * 260, 0.10, 'square', 0.13); }
-  function sndWall()      { beep(180, 0.07, 'triangle', 0.09); }
+  function sndHit(power)  { beep(320 + power * 260, 0.10, 'square', 0.04 + power * 0.12); }
+  function sndWall(power) { beep(180, 0.07, 'triangle', 0.03 + power * 0.09); }
   function sndGoal()      { [523, 659, 784, 1047].forEach(function (f, i) { beep(f, 0.20, 'square', 0.15, i * 0.09); }); }
   function sndWin()       { [523, 659, 784, 1047, 784, 1047, 1319].forEach(function (f, i) { beep(f, 0.26, 'square', 0.16, i * 0.13); }); }
   function sndStart()     { [523, 784, 1047].forEach(function (f, i) { beep(f, 0.17, 'square', 0.16, i * 0.07); }); }
@@ -362,7 +366,7 @@
     var w = TIMG.w * 0.80, h = w * ar;
     var maxH = TIMG.h * 0.13;
     if (h > maxH) { h = maxH; w = h / ar; }
-    return { x: TIMG.x + TIMG.w / 2, y: TIMG.y + TIMG.h * 0.795, w: w, h: h };
+    return { x: TIMG.x + TIMG.w / 2, y: TIMG.y + TIMG.h * 0.5, w: w, h: h };
   }
 
   function modeBtnRect(i) {          // 0 = ひとり(左) / 1 = ふたり(右)
@@ -372,7 +376,7 @@
     var maxH = TIMG.h * 0.19;
     if (h > maxH) { h = maxH; w = h / ar; }
     return { x: TIMG.x + TIMG.w * (i === 0 ? 0.262 : 0.738),
-             y: TIMG.y + TIMG.h * 0.76, w: w, h: h };
+             y: TIMG.y + TIMG.h * 0.5, w: w, h: h };
   }
 
   function onDown(e) {
@@ -613,15 +617,15 @@
     var inGoalX = Math.abs(puck.x - F.cx) < gh;
     var left = F.x, right = F.x + F.w, top = F.y, bottom = F.y + F.h;
 
-    if (puck.x - puck.r < left)   { puck.x = left + puck.r;   puck.vx = Math.abs(puck.vx) * WALL_BOUNCE; bump(); }
-    if (puck.x + puck.r > right)  { puck.x = right - puck.r;  puck.vx = -Math.abs(puck.vx) * WALL_BOUNCE; bump(); }
+    if (puck.x - puck.r < left)   { bump(Math.abs(puck.vx)); puck.x = left + puck.r;   puck.vx = Math.abs(puck.vx) * WALL_BOUNCE; }
+    if (puck.x + puck.r > right)  { bump(Math.abs(puck.vx)); puck.x = right - puck.r;  puck.vx = -Math.abs(puck.vx) * WALL_BOUNCE; }
 
     // 上のゴール（入ると下のプレイヤーの得点）
     if (puck.y - puck.r < top) {
       if (inGoalX) {
         if (puck.y < top - puck.r * 0.4) { scoreGoal(0); return true; }
       } else {
-        puck.y = top + puck.r; puck.vy = Math.abs(puck.vy) * WALL_BOUNCE; bump();
+        bump(Math.abs(puck.vy)); puck.y = top + puck.r; puck.vy = Math.abs(puck.vy) * WALL_BOUNCE;
       }
     }
     // 下のゴール（入ると上のプレイヤーの得点）
@@ -629,14 +633,19 @@
       if (inGoalX) {
         if (puck.y > bottom + puck.r * 0.4) { scoreGoal(1); return true; }
       } else {
-        puck.y = bottom - puck.r; puck.vy = -Math.abs(puck.vy) * WALL_BOUNCE; bump();
+        bump(Math.abs(puck.vy)); puck.y = bottom - puck.r; puck.vy = -Math.abs(puck.vy) * WALL_BOUNCE;
       }
     }
     return false;
   }
 
   var wallCool = 0;
-  function bump() { if (wallCool <= 0) { sndWall(); wallCool = 0.08; } }
+  function bump(v) {
+    if (wallCool > 0) return;
+    if (v < 0.13 * F.w) return;          // かすっただけなら鳴らさない
+    sndWall(Math.min(1, v / (PUCK_MAX * F.w)));
+    wallCool = 0.13;
+  }
 
   function collide(m) {
     var dx = puck.x - m.x, dy = puck.y - m.y;
@@ -659,9 +668,24 @@
     var ms = m.vx * nx + m.vy * ny;
     if (ms > 0) { puck.vx += nx * ms * 0.55; puck.vy += ny * ms * 0.55; }
 
-    // 弱すぎる当たりでも必ず少し動くように
+    // 壁とマレットに挟まれて震え続けないよう、押しつぶされたら中央へ逃がす
+    var bx = puck.x, by = puck.y;
+    var gh2 = goalHalfWidth();
+    puck.x = clamp(puck.x, F.x + puck.r, F.x + F.w - puck.r);
+    if (Math.abs(puck.x - F.cx) >= gh2) {
+      puck.y = clamp(puck.y, F.y + puck.r, F.y + F.h - puck.r);
+    }
+    if (dist2(bx, by, puck.x, puck.y) > (puck.r * 0.35) * (puck.r * 0.35)) {
+      var dcx = F.cx - puck.x, dcy = F.cy - puck.y;
+      var dl = Math.sqrt(dcx * dcx + dcy * dcy) || 1;
+      var esc = 0.5 * F.w;
+      puck.vx = dcx / dl * esc;
+      puck.vy = dcy / dl * esc;
+    }
+
+    // くっついて止まらない程度に、ごく弱い下限だけ設ける
     var sp = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
-    var minSp = 0.34 * F.w;
+    var minSp = 0.09 * F.w;
     if (sp < minSp) {
       if (sp < 1) { puck.vx = nx * minSp; puck.vy = ny * minSp; }
       else        { puck.vx = puck.vx / sp * minSp; puck.vy = puck.vy / sp * minSp; }
@@ -674,8 +698,8 @@
 
   // 打った手ごたえ（対応している端末だけ震える）
   function buzz(power) {
-    if (!navigator.vibrate) return;
-    try { navigator.vibrate(Math.round(12 + power * 38)); } catch (e) {}
+    if (!navigator.vibrate || power < 0.06) return;   // そっと当てたときは震えない
+    try { navigator.vibrate(Math.round(8 + power * 42)); } catch (e) {}
   }
 
   function clampPuckSpeed() {
@@ -794,15 +818,24 @@
     ctx.fillRect(0, 0, W, H);
   }
 
-  function drawFitted(img, key, rect) {
+  function drawCover(img) {
+    var s = Math.max(W / img.width, H / img.height);
+    var w = img.width * s, h = img.height * s;
+    ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+  }
+
+  function drawFitted(img, key, rect, side) {
     ctx.fillStyle = '#0b1b3a';
     ctx.fillRect(0, 0, W, H);
-    if (rect.w < W - 1 || rect.h < H - 1) drawBackdrop(img, key);
+    if (rect.w < W - 1 || rect.h < H - 1) {
+      if (side && imgs.side) drawCover(imgs.side);   // 飾りの絵で余白をうめる
+      else drawBackdrop(img, key);
+    }
     ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h);
   }
 
   function drawField() {
-    if (imgs.field) { drawFitted(imgs.field, 'field', IMG); return; }
+    if (imgs.field) { drawFitted(imgs.field, 'field', IMG, true); return; }
     ctx.fillStyle = '#0b1b3a'; ctx.fillRect(0, 0, W, H);
     // 画像が読めていないあいだの代わり
     ctx.fillStyle = '#eaf4ff'; ctx.fillRect(0, 0, W, H);
@@ -1060,8 +1093,14 @@
               ctx.scale(pulse, pulse);
               ctx.fillStyle = 'rgba(255,255,255,0.95)';
               ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
-              ctx.font = (r * 1.15) + EMO;
-              ctx.fillText(JK_EMOJI[i], 0, r * 0.04);
+              var bi = imgs['jk' + i];
+              if (bi) {
+                var bd = r * 1.72;
+                ctx.drawImage(bi, -bd / 2, -bd / 2, bd, bd);
+              } else {
+                ctx.font = (r * 1.15) + EMO;
+                ctx.fillText(JK_EMOJI[i], 0, r * 0.04);
+              }
               ctx.restore();
             }
           }
@@ -1077,8 +1116,14 @@
         var pop = 1 + Math.max(0, 0.3 - modeTimer * 1.6);
         ctx.save();
         ctx.scale(pop, pop);
-        ctx.font = (r * 2.0) + EMO;
-        ctx.fillText(JK_EMOJI[jkChoice[side]], 0, -r * 0.75);
+        var hi = imgs['jk' + jkChoice[side]];
+        if (hi) {
+          var hd = r * 2.7;
+          ctx.drawImage(hi, -hd / 2, -r * 0.75 - hd / 2, hd, hd);
+        } else {
+          ctx.font = (r * 2.0) + EMO;
+          ctx.fillText(JK_EMOJI[jkChoice[side]], 0, -r * 0.75);
+        }
         ctx.restore();
 
         var won = (jkWinner === side);
