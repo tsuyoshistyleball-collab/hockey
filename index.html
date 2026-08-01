@@ -1,0 +1,689 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>ホッケー</title>
+<meta name="theme-color" content="#0b1b3a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ホッケー">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%; overflow:hidden; background:#0b1b3a;
+    -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color:transparent;
+    overscroll-behavior:none; touch-action:none;
+  }
+  #g {
+    position:fixed; inset:0; width:100%; height:100%;
+    display:block; touch-action:none;
+  }
+</style>
+
+<canvas id="g"></canvas>
+
+<script>
+(function () {
+  'use strict';
+
+  var cvs = document.getElementById('g');
+  var ctx = cvs.getContext('2d');
+
+  var W = 0, H = 0;            // 論理サイズ (CSSピクセル)
+  var WIN_SCORE = 5;
+
+  // ---------------------------------------------------------------- 見た目
+  var COL = {
+    ice:      '#eaf4ff',
+    topTint:  'rgba(255, 90, 120, 0.14)',
+    botTint:  'rgba(70, 140, 255, 0.14)',
+    line:     'rgba(20, 60, 120, 0.22)',
+    p1:       '#2f7dff',   // 下のプレイヤー
+    p1dark:   '#1b4ea8',
+    p2:       '#ff4d6d',   // 上のプレイヤー
+    p2dark:   '#b3253f',
+    puck:     '#ff9f1c',
+    puckDark: '#c26a00'
+  };
+
+  // ---------------------------------------------------------------- 状態
+  var puck = { x:0, y:0, vx:0, vy:0, r:0 };
+  var mallets = [
+    // side 0 = 下(プレイヤー1) / side 1 = 上(プレイヤー2)
+    { side:0, x:0, y:0, tx:0, ty:0, vx:0, vy:0, r:0, pid:null, col:COL.p1, dark:COL.p1dark },
+    { side:1, x:0, y:0, tx:0, ty:0, vx:0, vy:0, r:0, pid:null, col:COL.p2, dark:COL.p2dark }
+  ];
+
+  var score      = [0, 0];
+  var mode       = 'play';   // 'play' | 'goal' | 'win'
+  var modeTimer  = 0;
+  var goalSide   = 0;        // 得点したプレイヤー
+  var showHint   = true;
+  var idleTime   = 0;        // パックが止まっている時間
+  var flash      = 0;        // ゴール時の画面フラッシュ
+  var shake      = 0;
+  var trail      = [];
+  var resetBtn   = { x:0, y:0, r:0 };
+  var resetPid   = null;     // リセットは長押しでのみ発動（誤タップ防止）
+  var resetHold  = 0;
+  var RESET_HOLD = 0.9;
+
+  // ---------------------------------------------------------------- 配置
+  function layout() {
+    var s = Math.min(W, H * 0.62);           // 大きさの基準
+    puck.r     = s * 0.058;
+    mallets[0].r = mallets[1].r = s * 0.092;
+    resetBtn.r = s * 0.055;
+    resetBtn.x = resetBtn.r * 1.25;
+    resetBtn.y = H / 2;
+    placeAll();
+  }
+
+  function goalHalfWidth() { return Math.min(W * 0.24, H * 0.14); }
+  function centerR()       { return Math.min(W, H) * 0.12; }
+  function isLandscape()   { return W > H * 1.15; }   // 縦向き専用のゲーム
+
+  function placeAll() {
+    resetPuck();
+    var m0 = mallets[0], m1 = mallets[1];
+    m0.x = m0.tx = W / 2; m0.y = m0.ty = H * 0.80;
+    m1.x = m1.tx = W / 2; m1.y = m1.ty = H * 0.20;
+    m0.vx = m0.vy = m1.vx = m1.vy = 0;
+  }
+
+  function resetPuck() {
+    puck.x = W / 2; puck.y = H / 2;
+    puck.vx = 0; puck.vy = 0;
+    trail.length = 0;
+    idleTime = 0;
+    // 再開位置にマレットが居ると弾いてしまうので自陣側へ少し下げる
+    for (var i = 0; i < 2; i++) {
+      var m = mallets[i];
+      var need = m.r + puck.r + Math.max(4, m.r * 0.15);
+      if (dist2(m.x, m.y, puck.x, puck.y) < need * need) {
+        m.y = m.ty = puck.y + (m.side === 0 ? need : -need);
+        m.vx = m.vy = 0;
+        clampTarget(m);
+      }
+    }
+  }
+
+  function resize() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    W = cvs.clientWidth;
+    H = cvs.clientHeight;
+    cvs.width  = Math.round(W * dpr);
+    cvs.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    layout();
+  }
+
+  // ---------------------------------------------------------------- 音
+  var ac = null;
+  function audio() {
+    if (!ac) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) ac = new AC();
+    }
+    if (ac && ac.state === 'suspended') ac.resume();
+    return ac;
+  }
+  function beep(freq, dur, type, vol, delay) {
+    var a = audio();
+    if (!a) return;
+    var t = a.currentTime + (delay || 0);
+    var o = a.createOscillator(), g = a.createGain();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.18, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(a.destination);
+    o.start(t); o.stop(t + dur + 0.03);
+  }
+  function sndHit(power)  { beep(320 + power * 260, 0.10, 'square', 0.13); }
+  function sndWall()      { beep(180, 0.07, 'triangle', 0.09); }
+  function sndGoal() {
+    [523, 659, 784, 1047].forEach(function (f, i) { beep(f, 0.20, 'square', 0.15, i * 0.09); });
+  }
+  function sndWin() {
+    [523, 659, 784, 1047, 784, 1047, 1319].forEach(function (f, i) {
+      beep(f, 0.26, 'square', 0.16, i * 0.13);
+    });
+  }
+
+  // ---------------------------------------------------------------- 入力
+  function pointerPos(e) {
+    var r = cvs.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+
+  function onDown(e) {
+    audio();
+    var p = pointerPos(e);
+
+    // 勝ったときはお祝いを少し見せてからタップを受け付ける
+    if (mode === 'win') { if (modeTimer > 1.6) newGame(); return; }
+
+    // リセットボタン（長押しで発動）
+    if (dist2(p.x, p.y, resetBtn.x, resetBtn.y) < resetBtn.r * resetBtn.r * 2.2) {
+      resetPid = e.pointerId; resetHold = 0;
+      return;
+    }
+
+    showHint = false;
+    var side = p.y < H / 2 ? 1 : 0;
+    var m = mallets[side];
+    if (m.pid === null) {                 // その側の最初の指だけを受け付ける
+      m.pid = e.pointerId;
+      m.tx = p.x; m.ty = p.y;
+      clampTarget(m);
+    }
+  }
+
+  function onMove(e) {
+    var p = null;
+    if (resetPid === e.pointerId) {
+      p = pointerPos(e);
+      // 指がボタンから離れたら長押しを取り消す
+      if (dist2(p.x, p.y, resetBtn.x, resetBtn.y) > resetBtn.r * resetBtn.r * 4) {
+        resetPid = null; resetHold = 0;
+      }
+      return;
+    }
+    for (var i = 0; i < 2; i++) {
+      var m = mallets[i];
+      if (m.pid === e.pointerId) {
+        p = pointerPos(e);
+        m.tx = p.x; m.ty = p.y;
+        clampTarget(m);
+      }
+    }
+  }
+
+  function onUp(e) {
+    if (resetPid === e.pointerId) { resetPid = null; resetHold = 0; }
+    for (var i = 0; i < 2; i++) {
+      if (mallets[i].pid === e.pointerId) mallets[i].pid = null;
+    }
+  }
+
+  function dist2(ax, ay, bx, by) {
+    var dx = ax - bx, dy = ay - by;
+    return dx * dx + dy * dy;
+  }
+
+  function clampTarget(m) {
+    m.tx = Math.max(m.r, Math.min(W - m.r, m.tx));
+    if (m.side === 0) m.ty = Math.max(H / 2 + m.r * 0.1, Math.min(H - m.r, m.ty));
+    else              m.ty = Math.max(m.r, Math.min(H / 2 - m.r * 0.1, m.ty));
+  }
+
+  cvs.addEventListener('pointerdown',   onDown, { passive:true });
+  cvs.addEventListener('pointermove',   onMove, { passive:true });
+  cvs.addEventListener('pointerup',     onUp,   { passive:true });
+  cvs.addEventListener('pointercancel', onUp,   { passive:true });
+  document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
+  document.addEventListener('contextmenu',  function (e) { e.preventDefault(); });
+  document.addEventListener('dblclick',     function (e) { e.preventDefault(); });
+
+  // ---------------------------------------------------------------- 進行
+  function newGame() {
+    score[0] = score[1] = 0;
+    mode = 'play'; modeTimer = 0;
+    flash = 0; shake = 0;
+    placeAll();
+  }
+
+  function scoreGoal(side) {
+    score[side]++;
+    goalSide = side;
+    flash = 1; shake = 1;
+    puck.vx = puck.vy = 0;
+    if (score[side] >= WIN_SCORE) { mode = 'win'; modeTimer = 0; sndWin(); }
+    else                          { mode = 'goal'; modeTimer = 0; sndGoal(); }
+  }
+
+  // ---------------------------------------------------------------- 物理
+  var MAL_SPEED  = 3.0;   // 画面幅/秒
+  var PUCK_MAX   = 1.55;  // 画面幅/秒
+  var WALL_BOUNCE = 0.93;
+
+  function stepMallet(m, sdt) {
+    var dx = m.tx - m.x, dy = m.ty - m.y;
+    var d = Math.sqrt(dx * dx + dy * dy);
+    var step = MAL_SPEED * W * sdt;
+    var nx, ny;
+    if (d <= step || d === 0) { nx = m.tx; ny = m.ty; }
+    else { nx = m.x + dx / d * step; ny = m.y + dy / d * step; }
+    m.vx = (nx - m.x) / sdt;
+    m.vy = (ny - m.y) / sdt;
+    m.x = nx; m.y = ny;
+  }
+
+  function stepPuck(sdt) {
+    puck.x += puck.vx * sdt;
+    puck.y += puck.vy * sdt;
+
+    var gh = goalHalfWidth();
+    var inGoalX = Math.abs(puck.x - W / 2) < gh;
+
+    // 左右の壁
+    if (puck.x - puck.r < 0)     { puck.x = puck.r;     puck.vx = Math.abs(puck.vx) * WALL_BOUNCE; bump(); }
+    if (puck.x + puck.r > W)     { puck.x = W - puck.r; puck.vx = -Math.abs(puck.vx) * WALL_BOUNCE; bump(); }
+
+    // 上の壁 / 上のゴール（入ると下のプレイヤーの得点）
+    if (puck.y - puck.r < 0) {
+      if (inGoalX) {
+        if (puck.y < -puck.r * 0.4) { scoreGoal(0); return true; }
+      } else {
+        puck.y = puck.r; puck.vy = Math.abs(puck.vy) * WALL_BOUNCE; bump();
+      }
+    }
+    // 下の壁 / 下のゴール（入ると上のプレイヤーの得点）
+    if (puck.y + puck.r > H) {
+      if (inGoalX) {
+        if (puck.y > H + puck.r * 0.4) { scoreGoal(1); return true; }
+      } else {
+        puck.y = H - puck.r; puck.vy = -Math.abs(puck.vy) * WALL_BOUNCE; bump();
+      }
+    }
+    return false;
+  }
+
+  var wallCool = 0;
+  function bump() { if (wallCool <= 0) { sndWall(); wallCool = 0.08; } }
+
+  function collide(m) {
+    var dx = puck.x - m.x, dy = puck.y - m.y;
+    var d = Math.sqrt(dx * dx + dy * dy);
+    var min = puck.r + m.r;
+    if (d >= min) return;
+    if (d < 0.0001) { dx = 0; dy = m.side === 0 ? -1 : 1; d = 1; }
+    var nx = dx / d, ny = dy / d;
+
+    // 重なりを解消
+    puck.x = m.x + nx * min;
+    puck.y = m.y + ny * min;
+
+    // 相対速度を法線方向に反射
+    var rvx = puck.vx - m.vx, rvy = puck.vy - m.vy;
+    var vn = rvx * nx + rvy * ny;
+    if (vn < 0) {
+      var j = -(1 + 0.92) * vn;
+      puck.vx += nx * j;
+      puck.vy += ny * j;
+    }
+    // マレットの押し出しを少し足す
+    var ms = m.vx * nx + m.vy * ny;
+    if (ms > 0) { puck.vx += nx * ms * 0.55; puck.vy += ny * ms * 0.55; }
+
+    // 弱すぎる当たりでも必ず少し動くように
+    var sp = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
+    var minSp = 0.28 * W;
+    if (sp < minSp) {
+      if (sp < 1) { puck.vx = nx * minSp; puck.vy = ny * minSp; }
+      else        { puck.vx = puck.vx / sp * minSp; puck.vy = puck.vy / sp * minSp; }
+      sp = minSp;
+    }
+    sndHit(Math.min(1, sp / (PUCK_MAX * W)));
+  }
+
+  function clampPuckSpeed() {
+    var sp = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
+    var max = PUCK_MAX * W;
+    if (sp > max) { puck.vx = puck.vx / sp * max; puck.vy = puck.vy / sp * max; }
+  }
+
+  function update(dt) {
+    wallCool -= dt;
+    if (flash  > 0) flash  = Math.max(0, flash  - dt * 2.6);
+    if (shake  > 0) shake  = Math.max(0, shake  - dt * 3.0);
+
+    if (resetPid !== null) {
+      resetHold += dt;
+      if (resetHold >= RESET_HOLD) {
+        resetPid = null; resetHold = 0;
+        beep(880, 0.14, 'square', 0.14);
+        newGame();
+      }
+    }
+
+    if (mode === 'goal') {
+      modeTimer += dt;
+      if (modeTimer > 1.1) { mode = 'play'; modeTimer = 0; resetPuck(); }
+    } else if (mode === 'win') {
+      modeTimer += dt;
+    }
+
+    var frozen = (mode !== 'play') || isLandscape();
+    var N = 6, sdt = dt / N;
+
+    for (var s = 0; s < N; s++) {
+      stepMallet(mallets[0], sdt);
+      stepMallet(mallets[1], sdt);
+      if (frozen) continue;
+      if (stepPuck(sdt)) break;
+      collide(mallets[0]);
+      collide(mallets[1]);
+      clampPuckSpeed();
+    }
+
+    if (!frozen) {
+      // わずかな摩擦
+      var f = Math.pow(0.78, dt);
+      puck.vx *= f; puck.vy *= f;
+      var sp = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
+      if (sp < 0.01 * W) { puck.vx = puck.vy = 0; }
+
+      // 隅で止まってしまったら真ん中に戻す（子ども向けの救済）
+      if (sp < 0.05 * W) {
+        idleTime += dt;
+        if (idleTime > 4) { resetPuck(); }
+      } else idleTime = 0;
+
+      // 残像
+      trail.push({ x: puck.x, y: puck.y });
+      if (trail.length > 7) trail.shift();
+    }
+  }
+
+  // ---------------------------------------------------------------- 描画
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function drawRink() {
+    ctx.fillStyle = COL.ice;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = COL.topTint; ctx.fillRect(0, 0, W, H / 2);
+    ctx.fillStyle = COL.botTint; ctx.fillRect(0, H / 2, W, H / 2);
+
+    // センターライン
+    ctx.strokeStyle = COL.line;
+    ctx.lineWidth = Math.max(3, W * 0.012);
+    ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+
+    // センターサークル
+    ctx.lineWidth = Math.max(2, W * 0.008);
+    ctx.beginPath(); ctx.arc(W / 2, H / 2, centerR(), 0, 7); ctx.stroke();
+
+    // ゴール
+    var gh = goalHalfWidth();
+    var gd = Math.max(10, H * 0.022);
+    ctx.fillStyle = COL.p2;
+    roundRect(W / 2 - gh, -gd, gh * 2, gd * 2, gd * 0.6); ctx.fill();
+    ctx.fillStyle = COL.p1;
+    roundRect(W / 2 - gh, H - gd, gh * 2, gd * 2, gd * 0.6); ctx.fill();
+
+    // ゴールの口（白い線）
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = Math.max(3, W * 0.011);
+    ctx.beginPath(); ctx.moveTo(W / 2 - gh, gd * 0.9); ctx.lineTo(W / 2 + gh, gd * 0.9); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(W / 2 - gh, H - gd * 0.9); ctx.lineTo(W / 2 + gh, H - gd * 0.9); ctx.stroke();
+  }
+
+  function drawScore() {
+    var r   = Math.min(W, H) * 0.019;
+    var gap = r * 2.9;
+    var total = (WIN_SCORE - 1) * gap;
+    var off = centerR() + r * 2.8;      // センターサークルの外側に置く
+
+    for (var side = 0; side < 2; side++) {
+      var y = side === 0 ? H / 2 + off : H / 2 - off;
+      var col = side === 0 ? COL.p1 : COL.p2;
+      for (var i = 0; i < WIN_SCORE; i++) {
+        var x = W / 2 - total / 2 + i * gap;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, 7);
+        if (i < score[side]) {
+          ctx.fillStyle = col; ctx.fill();
+        } else {
+          ctx.strokeStyle = 'rgba(20,60,120,0.25)';
+          ctx.lineWidth = Math.max(2, r * 0.32);
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  function drawMallet(m) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.28)';
+    ctx.shadowBlur = m.r * 0.5;
+    ctx.shadowOffsetY = m.r * 0.16;
+    ctx.fillStyle = m.dark;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, 7); ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = m.col;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r * 0.9, 0, 7); ctx.fill();
+
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r * 0.42, 0, 7); ctx.fill();
+    ctx.fillStyle = m.col;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r * 0.28, 0, 7); ctx.fill();
+  }
+
+  function drawPuck() {
+    for (var i = 0; i < trail.length; i++) {
+      var t = trail[i];
+      ctx.globalAlpha = (i + 1) / trail.length * 0.22;
+      ctx.fillStyle = COL.puck;
+      ctx.beginPath(); ctx.arc(t.x, t.y, puck.r * 0.85, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.3)';
+    ctx.shadowBlur = puck.r * 0.6;
+    ctx.shadowOffsetY = puck.r * 0.2;
+    ctx.fillStyle = COL.puckDark;
+    ctx.beginPath(); ctx.arc(puck.x, puck.y, puck.r, 0, 7); ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = COL.puck;
+    ctx.beginPath(); ctx.arc(puck.x, puck.y, puck.r * 0.82, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.beginPath(); ctx.arc(puck.x - puck.r * 0.28, puck.y - puck.r * 0.3, puck.r * 0.24, 0, 7); ctx.fill();
+  }
+
+  function drawResetBtn() {
+    ctx.save();
+    ctx.globalAlpha = 0.42;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(resetBtn.x, resetBtn.y, resetBtn.r, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#1b4ea8';
+    ctx.lineWidth = Math.max(2.5, resetBtn.r * 0.16);
+    ctx.beginPath();
+    ctx.arc(resetBtn.x, resetBtn.y, resetBtn.r * 0.52, 0.6, 5.4);
+    ctx.stroke();
+    var ax = resetBtn.x + resetBtn.r * 0.52 * Math.cos(5.4);
+    var ay = resetBtn.y + resetBtn.r * 0.52 * Math.sin(5.4);
+    ctx.beginPath();
+    ctx.moveTo(ax - resetBtn.r * 0.2, ay - resetBtn.r * 0.05);
+    ctx.lineTo(ax + resetBtn.r * 0.1, ay - resetBtn.r * 0.22);
+    ctx.lineTo(ax + resetBtn.r * 0.14, ay + resetBtn.r * 0.16);
+    ctx.closePath();
+    ctx.fillStyle = '#1b4ea8'; ctx.fill();
+    ctx.restore();
+
+    // 長押しの進み具合
+    if (resetPid !== null) {
+      ctx.save();
+      ctx.strokeStyle = '#1b4ea8';
+      ctx.lineWidth = Math.max(3, resetBtn.r * 0.2);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(resetBtn.x, resetBtn.y, resetBtn.r * 0.86,
+              -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (resetHold / RESET_HOLD));
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  function drawHint(t) {
+    var pulse = 0.72 + Math.sin(t * 3.4) * 0.28;
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    var fs = Math.min(W * 0.075, H * 0.045);
+    ctx.font = '700 ' + fs + 'px system-ui, -apple-system, "Hiragino Sans", sans-serif';
+
+    ctx.fillStyle = COL.p1dark;
+    ctx.fillText('ゆびで うごかそう', W / 2, H * 0.90);
+
+    ctx.save();
+    ctx.translate(W / 2, H * 0.10);
+    ctx.rotate(Math.PI);
+    ctx.fillStyle = COL.p2dark;
+    ctx.fillText('ゆびで うごかそう', 0, 0);
+    ctx.restore();
+    ctx.restore();
+  }
+
+  // 2人が向かい合って見るので、上下それぞれの向きで表示する
+  function drawGoalBanner() {
+    var k = Math.min(1, modeTimer / 0.22);
+    var scale = 0.6 + k * 0.4;
+    var col = goalSide === 0 ? COL.p1 : COL.p2;
+    var fs = Math.min(W * 0.17, H * 0.085);
+
+    for (var side = 0; side < 2; side++) {
+      ctx.save();
+      if (side === 0) ctx.translate(W / 2, H * 0.70);
+      else { ctx.translate(W / 2, H * 0.30); ctx.rotate(Math.PI); }
+      ctx.scale(scale, scale);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '900 ' + fs + 'px system-ui, -apple-system, "Hiragino Sans", sans-serif';
+      ctx.lineWidth = fs * 0.18;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineJoin = 'round';
+      var msg = goalSide === side ? 'ゴール！' : 'はいった！';
+      ctx.strokeText(msg, 0, 0);
+      ctx.fillStyle = col;
+      ctx.fillText(msg, 0, 0);
+      ctx.restore();
+    }
+  }
+
+  function drawWin(t) {
+    ctx.fillStyle = 'rgba(10,25,55,0.55)';
+    ctx.fillRect(0, 0, W, H);
+
+    var col = goalSide === 0 ? COL.p1 : COL.p2;
+    var bounce = Math.sin(t * 4) * (Math.min(W, H) * 0.02);
+
+    var ef = Math.min(W * 0.22, H * 0.13);
+    var fs = Math.min(W * 0.11, H * 0.062);
+    var ss = Math.min(W * 0.058, H * 0.032);
+
+    for (var side = 0; side < 2; side++) {
+      var won = (goalSide === side);
+      ctx.save();
+      if (side === 0) ctx.translate(W / 2, H * 0.76);
+      else { ctx.translate(W / 2, H * 0.24); ctx.rotate(Math.PI); }
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      ctx.font = ef + 'px system-ui, -apple-system, "Apple Color Emoji", sans-serif';
+      ctx.fillText(won ? '🏆' : '👏', 0, -ef * 0.72 + (won ? bounce : 0));
+
+      ctx.font = '900 ' + fs + 'px system-ui, -apple-system, "Hiragino Sans", sans-serif';
+      ctx.lineWidth = fs * 0.18;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineJoin = 'round';
+      var msg = won ? 'かち！' : 'まけ…';
+      ctx.strokeText(msg, 0, ef * 0.16);
+      ctx.fillStyle = won ? col : '#9fb2cf';
+      ctx.fillText(msg, 0, ef * 0.16);
+
+      ctx.font = '700 ' + ss + 'px system-ui, -apple-system, "Hiragino Sans", sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(t * 3) * 0.3) + ')';
+      ctx.fillText('タップで もういちど', 0, ef * 0.16 + fs * 1.15);
+      ctx.restore();
+    }
+  }
+
+  function render(t) {
+    ctx.save();
+    if (shake > 0) {
+      var a = shake * Math.min(W, H) * 0.012;
+      ctx.translate((Math.random() - 0.5) * a, (Math.random() - 0.5) * a);
+    }
+
+    drawRink();
+    drawScore();
+    if (mode !== 'goal' || modeTimer < 0.9) drawPuck();
+    drawMallet(mallets[0]);
+    drawMallet(mallets[1]);
+    drawResetBtn();   // マレットに隠れないよう最後に描く
+
+    if (showHint && mode === 'play') drawHint(t);
+    if (mode === 'goal') drawGoalBanner();
+
+    ctx.restore();
+
+    if (flash > 0) {
+      ctx.fillStyle = 'rgba(255,255,255,' + (flash * 0.28) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+    if (mode === 'win') drawWin(t);
+    if (isLandscape()) drawRotateHint(t);
+  }
+
+  function drawRotateHint(t) {
+    ctx.fillStyle = 'rgba(11,27,58,0.88)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    var ef = Math.min(W * 0.12, H * 0.2);
+    ctx.save();
+    ctx.translate(W / 2, H * 0.40);
+    ctx.rotate(Math.sin(t * 2) * 0.35 - 0.2);
+    ctx.font = ef + 'px system-ui, -apple-system, "Apple Color Emoji", sans-serif';
+    ctx.fillText('📱', 0, 0);
+    ctx.restore();
+
+    var fs = Math.min(W * 0.055, H * 0.09);
+    ctx.font = '900 ' + fs + 'px system-ui, -apple-system, "Hiragino Sans", sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('たてむきに してね', W / 2, H * 0.72);
+    ctx.restore();
+  }
+
+  // ---------------------------------------------------------------- ループ
+  var last = 0;
+  function frame(now) {
+    var t = now / 1000;
+    var dt = last ? Math.min(0.05, t - last) : 0.016;
+    last = t;
+    update(dt);
+    render(t);
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', function () { setTimeout(resize, 200); });
+  resize();
+  requestAnimationFrame(frame);
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function () {});
+    });
+  }
+})();
+</script>
