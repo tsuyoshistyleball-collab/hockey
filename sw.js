@@ -1,10 +1,19 @@
-/* オフラインでも遊べるようにキャッシュする */
-var CACHE = 'hockey-v4';
+/* オフラインでも遊べるようにキャッシュする。
+   中身を更新したら CACHE の番号と index.html の APP_VERSION を必ず上げること。 */
+var CACHE = 'hockey-v5';
 
-/* 画像などは名前にバージョンが入っているのでキャッシュ優先でよい */
 var ASSETS = [
   './',
   './index.html',
+  './field.jpg',
+  './title-bg.jpg',
+  './btn-start.png',
+  './btn-solo.png',
+  './btn-duo.png',
+  './mallet-red.png',
+  './mallet-blue.png',
+  './puck.png',
+  './title.mp3',
   './icon-192-2.png',
   './icon-512-2.png',
   './icon-512-maskable-2.png'
@@ -28,6 +37,7 @@ self.addEventListener('activate', function (e) {
 });
 
 function putInCache(req, res) {
+  if (!res || res.status !== 200 || res.type === 'opaque') return;
   var copy = res.clone();
   caches.open(CACHE).then(function (c) { c.put(req, copy); }).catch(function () {});
 }
@@ -43,7 +53,7 @@ self.addEventListener('fetch', function (e) {
 
   if (isDoc || isManifest) {
     e.respondWith(
-      fetch(req).then(function (res) {
+      fetch(req.url, { cache: 'no-store', credentials: 'same-origin' }).then(function (res) {
         putInCache(req, res);
         return res;
       }).catch(function () {
@@ -55,7 +65,7 @@ self.addEventListener('fetch', function (e) {
     return;
   }
 
-  // それ以外はキャッシュ優先
+  // それ以外（画像・音）はキャッシュ優先
   e.respondWith(
     caches.match(req).then(function (hit) {
       if (hit) return hit;
