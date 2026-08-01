@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.4.0';
+  var APP_VERSION = '2.5.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -148,7 +148,8 @@
   var CD_STEP    = 0.8;      // カウント1つぶんの秒数
   var players    = 2;        // 1 = コンピューターと対戦
   var showHint   = true;
-  var idleTime   = 0;
+  var idleTime   = 0;        // パックがその場から動けていない時間
+  var stuckT     = 0, stuckX = 0, stuckY = 0;
   var flash      = 0;
   var shake      = 0;
   var trail      = [];
@@ -170,7 +171,7 @@
   var JK_WAIT  = 8;          // 片方だけ選んで止まらないための待ち時間（秒）
 
   // コンピューター（4歳児が勝てるようにかなり弱くしている）
-  var AI_SPEED = 1.16;       // 盤面の幅/秒（人は 3.65）
+  var AI_SPEED = 0.95;       // 盤面の幅/秒（人は 3.2）
   var ai = { think:0, errX:0, rest:0, jkT:0 };
 
   // ---------------------------------------------------------------- 配置
@@ -533,8 +534,8 @@
   // 点を入れられた方へ、ゆっくりパックを転がす
   function serve() {
     var dir = serveSide === 0 ? 1 : -1;        // side 0 は下側
-    puck.vx = (Math.random() - 0.5) * 0.17 * F.w;
-    puck.vy = dir * 0.51 * F.w;
+    puck.vx = (Math.random() - 0.5) * 0.12 * F.w;
+    puck.vy = dir * 0.38 * F.w;
     mode = 'play'; modeTimer = 0;
     sndWhistle();
   }
@@ -588,22 +589,48 @@
     }
     if (ai.rest > 0) { ai.rest -= dt; return; }        // ときどきぼーっとする
 
+    var home = F.y + F.h * 0.15;
+
+    // 隅のパックは押し出せないので、追いかけずに待つ（挟み込み防止）
+    var margin = m.r * 1.5;
+    if (puck.y < F.y + margin * 1.5 &&
+        (puck.x < F.x + margin || puck.x > F.x + F.w - margin)) {
+      m.tx = F.cx + (puck.x - F.cx) * 0.45;
+      m.ty = home;
+      clampTarget(m);
+      return;
+    }
+
+    // パックが動けなくなっているときは、押し続けずに一度離れる
+    if (idleTime > 0.6) {
+      m.tx = F.cx + (puck.x - F.cx) * 0.5;
+      m.ty = home;
+      clampTarget(m);
+      return;
+    }
+
     if (mode === 'play' && puck.y < F.cy) {
-      m.tx = puck.x + ai.errX;                         // 自陣に来たら追いかける
-      m.ty = puck.y;
+      // パックの向こう側（相手ゴールの反対側）に回り込んで押し出す。
+      // 真上から重ねると、壁ぎわでパックを挟み込んでしまうため
+      var gx = F.cx, gy = F.y + F.h;                   // 相手のゴール
+      var dx = puck.x - gx, dy = puck.y - gy;
+      var d = Math.sqrt(dx * dx + dy * dy) || 1;
+      var back = m.r + puck.r * 0.85;
+      m.tx = puck.x + dx / d * back + ai.errX;
+      m.ty = puck.y + dy / d * back;
     } else {
       m.tx = F.cx + (puck.x - F.cx) * 0.35 + ai.errX * 0.5;
-      m.ty = F.y + F.h * 0.15;                         // ゴール前に戻る
+      m.ty = home;                                     // ゴール前に戻る
     }
     clampTarget(m);
   }
 
   // ---------------------------------------------------------------- 物理
-  var MAL_SPEED   = 3.65;   // 盤面の幅/秒
-  var PUCK_MAX    = 1.89;
+  var MAL_SPEED   = 3.2;    // 盤面の幅/秒
+  var PUCK_MAX    = 1.10;   // パックの最高速度。小さいほどゆっくりでやさしい
   var REST        = 0.35;   // 止まっているマレットに当たったとき、どれだけ返るか
-  var HIT_MIN     = 0.50;   // そっと当てたとき、マレットの速さの何倍でパックが動くか
-  var HIT_MAX     = 1.10;   // 強く当てたとき
+  var HIT_MIN     = 0.40;   // そっと当てたとき、マレットの速さの何倍でパックが動くか
+  var HIT_MAX     = 0.80;   // 強く当てたとき
   var HIT_COOL    = 0.09;   // 同じマレットが続けて当たらない時間（秒）
   var WALL_BOUNCE = 0.93;
 
@@ -707,7 +734,7 @@
     if (Math.abs(puck.x - F.cx) >= gh2) {
       puck.y = clamp(puck.y, F.y + puck.r, F.y + F.h - puck.r);
     }
-    if (dist2(bx, by, puck.x, puck.y) > (puck.r * 0.35) * (puck.r * 0.35)) {
+    if (dist2(bx, by, puck.x, puck.y) > (puck.r * 0.12) * (puck.r * 0.12)) {
       var dcx = F.cx - puck.x, dcy = F.cy - puck.y;
       var dl = Math.sqrt(dcx * dcx + dcy * dcy) || 1;
       var esc = 0.5 * F.w;
@@ -825,16 +852,32 @@
     }
 
     if (!frozen) {
-      var f = Math.pow(0.78, dt);
+      var f = Math.pow(0.88, dt);
       puck.vx *= f; puck.vy *= f;
       var sp = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
       if (sp < 0.012 * F.w) { puck.vx = puck.vy = 0; }
 
-      // 隅で止まってしまったら真ん中に戻す（子ども向けの救済）
-      if (sp < 0.06 * F.w) {
-        idleTime += dt;
-        if (idleTime > 4) resetPuck();
-      } else idleTime = 0;
+      // 隅は構造上マレットで押し出せないので、止まりかけたら中央へそっと転がす
+      var edge = puck.r * 2.2;
+      var nearWall = puck.x < F.x + edge || puck.x > F.x + F.w - edge ||
+                     puck.y < F.y + edge || puck.y > F.y + F.h - edge;
+      if (nearWall && (sp < 0.10 * F.w || idleTime > 0.25)) {
+        var ax = F.cx - puck.x, ay = F.cy - puck.y;
+        var al = Math.sqrt(ax * ax + ay * ay) || 1;
+        puck.vx += ax / al * 0.7 * F.w * dt;
+        puck.vy += ay / al * 0.7 * F.w * dt;
+      }
+
+      // 隅で動けなくなっていないか、位置の変化で見る
+      // （壁とマレットの間で細かく震えている状態も拾えるようにするため）
+      stuckT += dt;
+      if (stuckT > 0.5) {
+        var moved = puck.r * 0.9;      // ほぼその場から動いていないときだけ数える
+        if (dist2(puck.x, puck.y, stuckX, stuckY) < moved * moved) idleTime += stuckT;
+        else idleTime = 0;
+        stuckX = puck.x; stuckY = puck.y; stuckT = 0;
+      }
+      if (idleTime > 3) { resetPuck(); idleTime = 0; }
 
       trail.push({ x: puck.x, y: puck.y });
       if (trail.length > 7) trail.shift();
