@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '3.0.0';
+  var APP_VERSION = '3.0.1';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -808,9 +808,13 @@
     }
   }
 
+  // ひとりで遊ぶとき、コンピューターはほし集めも必殺技も使わない
+  function usesStar(side) { return !(players === 1 && side === 1); }
+
   function updateStars(dt) {
     for (var s = 0; s < 2; s++) {
       if (zap[s] > 0) zap[s] = Math.max(0, zap[s] - dt);
+      if (!usesStar(s)) { stars[s] = null; charge[s] = 0; continue; }
       if (stars[s]) {
         stars[s].t += dt;
         var m = mallets[s];
@@ -826,13 +830,6 @@
         starWait[s] -= dt;
         if (starWait[s] <= 0) spawnStar(s);
       }
-    }
-    // コンピューターは、たまったら少し待って使う
-    if (players === 1 && charge[1] >= STAR_NEED && zap[0] <= 0) {
-      ai.fireT += dt;
-      if (ai.fireT > 1.2) fireSkill(1);
-    } else if (players === 1) {
-      ai.fireT = 0;
     }
   }
 
@@ -882,7 +879,7 @@
       return;
     }
 
-    // 自陣にほしが出ていたら、先に取りに行く
+    // 自陣にほしが出ていたら、先に取りに行く（ふたりで遊ぶときのみ）
     if (mode === 'play' && stars[1] && puck.y > F.cy) {
       m.tx = stars[1].x; m.ty = stars[1].y;
       clampTarget(m);
@@ -1372,9 +1369,7 @@
   function drawCharge(t) {
     var R = skillR();
     for (var s = 0; s < 2; s++) {
-      if (players === 1 && s === 1 && charge[s] < STAR_NEED) {
-        // コンピューターぶんも見えるように、そのまま描く
-      }
+      if (!usesStar(s)) continue;
       var pos = skillBtnPos(s);
       ctx.save();
       ctx.translate(pos.x, pos.y);
