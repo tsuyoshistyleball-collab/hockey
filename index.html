@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.11.1';
+  var APP_VERSION = '2.12.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -701,11 +701,11 @@
   }
 
   // ---------------------------------------------------------------- 強打のエフェクト
-  function addSmashFx(x, y, power) {
-    // マレットが隠れないよう、マレットの大きさを基準にする
-    fx.push({ x: x, y: y, t: 0, life: 0.38,
-              rot: Math.random() * Math.PI * 2,
-              size: mallets[0].r * (2.0 + power * 1.2) });
+  function addSmashFx(x, y, power, ang) {
+    // マレットが隠れないよう、マレットの大きさを基準にする。
+    // ang はパックが飛んでいく向き
+    fx.push({ x: x, y: y, t: 0, life: 0.38, ang: ang,
+              size: mallets[0].r * (2.5 + power * 1.5) });
   }
 
   function updateFx(dt) {
@@ -722,13 +722,15 @@
       var f = fx[i];
       var k = f.t / f.life;
       var sc = 0.40 + 0.70 * (1 - Math.pow(1 - k, 2.6));   // ぱっと開いて
-      var a = k < 0.22 ? 1 : Math.max(0, 1 - (k - 0.22) / 0.78);
-      var d = f.size * sc;
+      var a = k < 0.32 ? 1 : Math.max(0, 1 - (k - 0.32) / 0.68);
+      // 飛んでいく向きに伸ばし、少し追いかけるように流す
+      var drift = f.size * 0.30 * k;
       ctx.save();
       ctx.globalAlpha = a;
-      ctx.translate(f.x, f.y);
-      ctx.rotate(f.rot + k * 0.35);
-      ctx.drawImage(img, -d / 2, -d / 2, d, d);
+      ctx.translate(f.x + Math.cos(f.ang) * drift, f.y + Math.sin(f.ang) * drift);
+      ctx.rotate(f.ang);
+      ctx.scale(sc * (1 + 0.55 * k), sc * (0.85 - 0.18 * k));
+      ctx.drawImage(img, -f.size / 2, -f.size / 2, f.size, f.size);
       ctx.restore();
     }
     ctx.globalAlpha = 1;
@@ -790,7 +792,7 @@
   var HIT_MIN     = 0.46;   // そっと当てたとき、マレットの速さの何倍でパックが動くか
   var HIT_MAX     = 1.70;   // 強く当てたとき
   var HIT_COOL    = 0.09;   // 同じマレットが続けて当たらない時間（秒）
-  var SMASH_AT    = 0.50;   // これ以上の強さで当たったら、強打の音になる
+  var SMASH_AT    = 0.75;   // これ以上の強さで当たったら、強打の音とエフェクトになる
   var WALL_BOUNCE = 0.93;
 
   // k = この刻みで、残りの距離のうちどれだけ進むか（最後の刻みで k=1 になる）
@@ -921,7 +923,8 @@
     var power = Math.min(1, sp / (PUCK_MAX * F.w));
     if (power >= SMASH_AT) {
       sndSmash(power);                           // 強打は専用の音とエフェクト
-      addSmashFx(m.x + nx * m.r, m.y + ny * m.r, power);
+      addSmashFx(m.x + nx * m.r, m.y + ny * m.r, power,
+                 Math.atan2(puck.vy, puck.vx));  // パックが飛ぶ向きに合わせる
     } else {
       sndHit(power);
     }
