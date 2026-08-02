@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.12.0';
+  var APP_VERSION = '3.0.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -46,7 +46,10 @@
     i.src = src;
   }
   loadImg('ttlStage','ttl-stage.png');
-  loadImg('fxSmash', 'fx-smash.png');
+  loadImg('star',    'star.png');
+  loadImg('skill',   'skill.png');
+  loadImg('malletRZ','mallet-red-zap.png');
+  loadImg('malletBZ','mallet-blue-zap.png');
   loadImg('bg',      'title-bg.jpg');
   loadImg('side',    'side.jpg');
   loadImg('jk0',     'jk-0.png');
@@ -166,7 +169,17 @@
   var shake      = 0;
   var trail      = [];
   var parts      = [];       // タップの粒
-  var fx         = [];       // 強打のエフェクト
+
+  // ほし集めと必殺技
+  var STAR_NEED  = 3;        // 必殺技に必要な数
+  var STAR_MIN   = 4.5;      // 次のほしが出るまでの秒数
+  var STAR_MAX   = 8.5;
+  var ZAP_TIME   = 3.0;      // しびれている秒数
+  var ZAP_IMG_K  = 1.55;     // しびれ絵は雷のぶん大きく描く
+  var stars      = [null, null];
+  var starWait   = [0, 0];
+  var charge     = [0, 0];
+  var zap        = [0, 0];   // しびれの残り時間
   var pressIdx   = -1;       // 押されたボタン
   var pressT     = 0;
 
@@ -188,7 +201,7 @@
 
   // コンピューター（4歳児が勝てるようにかなり弱くしている）
   var AI_SPEED = 0.95;       // 盤面の幅/秒（人のマレットは指の位置そのもの）
-  var ai = { think:0, errX:0, rest:0, jkT:0 };
+  var ai = { think:0, errX:0, rest:0, jkT:0, fireT:0 };
 
   // ---------------------------------------------------------------- 配置
   var prevW = 0, prevH = 0, prevX = 0, prevY = 0;
@@ -316,6 +329,46 @@
   function sndGoal()      { [523, 659, 784, 1047].forEach(function (f, i) { beep(f, 0.20, 'square', 0.15, i * 0.09); }); }
   function sndWin()       { [523, 659, 784, 1047, 784, 1047, 1319].forEach(function (f, i) { beep(f, 0.26, 'square', 0.16, i * 0.13); }); }
   function sndStart()     { [523, 784, 1047].forEach(function (f, i) { beep(f, 0.17, 'square', 0.16, i * 0.07); }); }
+
+  function sndStar(n) {
+    [0, 1, 2].forEach(function (i) {
+      beep(660 + n * 110 + i * 220, 0.11, 'square', 0.11, i * 0.055);
+    });
+  }
+
+  // 必殺技の「ビリビリ！」
+  function sndZap() {
+    var a = audio();
+    if (!a) return;
+    var t = a.currentTime, dur = 0.7;
+    var g = a.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.2, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    g.connect(a.destination);
+
+    var o = a.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(900, t);
+    o.frequency.exponentialRampToValueAtTime(90, t + dur);
+    var lfo = a.createOscillator(), lg = a.createGain();
+    lfo.type = 'square'; lfo.frequency.value = 38;      // ビリビリした震え
+    lg.gain.value = 260;
+    lfo.connect(lg); lg.connect(o.frequency);
+    o.connect(g);
+    o.start(t); o.stop(t + dur);
+    lfo.start(t); lfo.stop(t + dur);
+
+    var len = Math.floor(a.sampleRate * dur);
+    var buf = a.createBuffer(1, len, a.sampleRate);
+    var ch = buf.getChannelData(0);
+    for (var i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 1.5);
+    var src = a.createBufferSource(); src.buffer = buf;
+    var hp = a.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1400;
+    var ng = a.createGain(); ng.gain.value = 0.1;
+    src.connect(hp); hp.connect(ng); ng.connect(a.destination);
+    src.start(t); src.stop(t + dur);
+  }
 
   // 強く打ったときの「バシーン！」
   function sndSmash(power) {
@@ -538,6 +591,16 @@
       return;
     }
 
+    // 必殺技ボタン（3つたまっているときだけ反応する）
+    if (mode === 'play') {
+      for (var sk = 0; sk < 2; sk++) {
+        if (charge[sk] < STAR_NEED) continue;
+        if (players === 1 && sk === 1) continue;    // 上はコンピューターが使う
+        var sp2 = skillBtnPos(sk), sr2 = skillR() * 1.5;
+        if (dist2(p.x, p.y, sp2.x, sp2.y) < sr2 * sr2) { fireSkill(sk); return; }
+      }
+    }
+
     showHint = false;
     var side = p.y < F.cy ? 1 : 0;
     if (players === 1 && side === 1) return;      // 上はコンピューターが動かす
@@ -602,7 +665,7 @@
   function newGame() {
     score[0] = score[1] = 0;
     flash = 0; shake = 0;
-    fx.length = 0;
+    resetStars(true);
     battleBgm();
     placeAll();
     startJanken();          // 先行後攻はじゃんけんで決める
@@ -610,7 +673,7 @@
 
   function goTitle() {
     mode = 'title'; modeTimer = 0;
-    fx.length = 0;
+    resetStars(true);
     pressIdx = -1; pressT = 0;
     resetPid = null; resetHold = 0;
     homePid = null; homeHold = 0;
@@ -649,6 +712,7 @@
   }
 
   function startCount() {
+    resetStars(false);
     resetPuck();
     mode = 'count'; modeTimer = 0; lastCount = -1;
   }
@@ -700,40 +764,88 @@
     ctx.globalAlpha = 1;
   }
 
-  // ---------------------------------------------------------------- 強打のエフェクト
-  function addSmashFx(x, y, power, ang) {
-    // マレットが隠れないよう、マレットの大きさを基準にする。
-    // ang はパックが飛んでいく向き
-    fx.push({ x: x, y: y, t: 0, life: 0.38, ang: ang,
-              size: mallets[0].r * (2.5 + power * 1.5) });
+  // ---------------------------------------------------------------- ほし集めと必殺技
+  function starR()  { return mallets[0].r * 0.92; }
+  function skillR() { return Math.min(F.w * 0.075, F.h * 0.045); }
+
+  // 集めた数と必殺技ボタンを置く場所（自陣のゴールがわの角）
+  function skillBtnPos(side) {
+    return {
+      x: side === 0 ? F.x + F.w * 0.15 : F.x + F.w * 0.85,
+      y: side === 0 ? F.y + F.h * 0.945 : F.y + F.h * 0.055
+    };
   }
 
-  function updateFx(dt) {
-    for (var i = fx.length - 1; i >= 0; i--) {
-      fx[i].t += dt;
-      if (fx[i].t >= fx[i].life) fx.splice(i, 1);
+  function resetStars(all) {
+    stars[0] = stars[1] = null;
+    starWait[0] = 1.5 + Math.random() * 2;
+    starWait[1] = 1.5 + Math.random() * 2;
+    zap[0] = zap[1] = 0;
+    if (all) charge[0] = charge[1] = 0;
+  }
+
+  function spawnStar(side) {
+    var pad = mallets[side].r * 2.2 + starR();
+    var yTop = side === 0 ? F.cy + pad : F.y + pad;
+    var yBot = side === 0 ? F.y + F.h - pad : F.cy - pad;
+    if (yBot <= yTop) return;
+    for (var k = 0; k < 12; k++) {
+      var x = F.x + pad + Math.random() * (F.w - pad * 2);
+      var y = yTop + Math.random() * (yBot - yTop);
+      // パックやマレットに重ならない場所をえらぶ
+      var okd = (starR() + puck.r) * 2.2;
+      if (dist2(x, y, puck.x, puck.y) < okd * okd) continue;
+      var okm = (starR() + mallets[side].r) * 1.6;
+      if (dist2(x, y, mallets[side].x, mallets[side].y) < okm * okm) continue;
+      // スコアの丸や、集めた数の表示に重ならないようにする
+      var off = FLD.circle * IMG.h + Math.min(IMG.w, IMG.h) * 0.019 * 2.6;
+      if (Math.abs(y - (F.cy + off)) < starR() * 1.9) continue;
+      if (Math.abs(y - (F.cy - off)) < starR() * 1.9) continue;
+      var bp = skillBtnPos(side), bd = starR() + skillR() * 1.6;
+      if (dist2(x, y, bp.x, bp.y) < bd * bd) continue;
+      stars[side] = { x: x, y: y, t: 0 };
+      return;
     }
   }
 
-  function drawFx() {
-    var img = imgs.fxSmash;
-    if (!img) return;
-    for (var i = 0; i < fx.length; i++) {
-      var f = fx[i];
-      var k = f.t / f.life;
-      var sc = 0.40 + 0.70 * (1 - Math.pow(1 - k, 2.6));   // ぱっと開いて
-      var a = k < 0.32 ? 1 : Math.max(0, 1 - (k - 0.32) / 0.68);
-      // 飛んでいく向きに伸ばし、少し追いかけるように流す
-      var drift = f.size * 0.30 * k;
-      ctx.save();
-      ctx.globalAlpha = a;
-      ctx.translate(f.x + Math.cos(f.ang) * drift, f.y + Math.sin(f.ang) * drift);
-      ctx.rotate(f.ang);
-      ctx.scale(sc * (1 + 0.55 * k), sc * (0.85 - 0.18 * k));
-      ctx.drawImage(img, -f.size / 2, -f.size / 2, f.size, f.size);
-      ctx.restore();
+  function updateStars(dt) {
+    for (var s = 0; s < 2; s++) {
+      if (zap[s] > 0) zap[s] = Math.max(0, zap[s] - dt);
+      if (stars[s]) {
+        stars[s].t += dt;
+        var m = mallets[s];
+        var need = m.r + starR() * 0.7;
+        if (dist2(m.x, m.y, stars[s].x, stars[s].y) < need * need) {
+          burst(stars[s].x, stars[s].y, 16, F.w * 1.1);
+          stars[s] = null;
+          charge[s] = Math.min(STAR_NEED, charge[s] + 1);
+          starWait[s] = STAR_MIN + Math.random() * (STAR_MAX - STAR_MIN);
+          sndStar(charge[s]);
+        }
+      } else if (charge[s] < STAR_NEED) {
+        starWait[s] -= dt;
+        if (starWait[s] <= 0) spawnStar(s);
+      }
     }
-    ctx.globalAlpha = 1;
+    // コンピューターは、たまったら少し待って使う
+    if (players === 1 && charge[1] >= STAR_NEED && zap[0] <= 0) {
+      ai.fireT += dt;
+      if (ai.fireT > 1.2) fireSkill(1);
+    } else if (players === 1) {
+      ai.fireT = 0;
+    }
+  }
+
+  function fireSkill(side) {
+    var foe = 1 - side;
+    charge[side] = 0;
+    starWait[side] = STAR_MIN + Math.random() * (STAR_MAX - STAR_MIN);
+    zap[foe] = ZAP_TIME;
+    ai.fireT = 0;
+    shake = Math.max(shake, 0.9);
+    burst(mallets[foe].x, mallets[foe].y, 28, F.w * 1.5);
+    sndZap();
+    if (navigator.vibrate) { try { navigator.vibrate([40, 50, 40, 50, 90]); } catch (e) {} }
   }
 
   // ---------------------------------------------------------------- コンピューター
@@ -770,6 +882,13 @@
       return;
     }
 
+    // 自陣にほしが出ていたら、先に取りに行く
+    if (mode === 'play' && stars[1] && puck.y > F.cy) {
+      m.tx = stars[1].x; m.ty = stars[1].y;
+      clampTarget(m);
+      return;
+    }
+
     if (mode === 'play' && puck.y < F.cy) {
       // パックの向こう側（相手ゴールの反対側）に回り込んで押し出す。
       // 真上から重ねると、壁ぎわでパックを挟み込んでしまうため
@@ -798,6 +917,11 @@
   // k = この刻みで、残りの距離のうちどれだけ進むか（最後の刻みで k=1 になる）
   function stepMallet(m, sdt, k) {
     var nx, ny;
+    if (zap[m.side] > 0) {          // しびれている間は動けない
+      m.vx = 0; m.vy = 0;
+      m.tx = m.x; m.ty = m.y;
+      return;
+    }
     if (m.side === 1 && players === 1) {
       // コンピューターだけ速さの上限がある
       var maxV = AI_SPEED * F.w;
@@ -921,13 +1045,8 @@
       sp = minSp;
     }
     var power = Math.min(1, sp / (PUCK_MAX * F.w));
-    if (power >= SMASH_AT) {
-      sndSmash(power);                           // 強打は専用の音とエフェクト
-      addSmashFx(m.x + nx * m.r, m.y + ny * m.r, power,
-                 Math.atan2(puck.vy, puck.vx));  // パックが飛ぶ向きに合わせる
-    } else {
-      sndHit(power);
-    }
+    if (power >= SMASH_AT) sndSmash(power);      // 強打は専用の音
+    else                   sndHit(power);
     buzz(power);
   }
 
@@ -948,7 +1067,7 @@
 
   function update(dt) {
     updateParts(dt);
-    updateFx(dt);
+    if (mode === 'play') updateStars(dt);
     wallCool -= dt;
     if (flash > 0) flash = Math.max(0, flash - dt * 2.6);
     if (shake > 0) shake = Math.max(0, shake - dt * 3.0);
@@ -1158,14 +1277,23 @@
   }
 
   function drawMallet(m) {
-    var img = m.side === 0 ? imgs.malletB : imgs.malletR;
+    var numb = zap[m.side] > 0;
+    var img = numb ? (m.side === 0 ? imgs.malletBZ : imgs.malletRZ)
+                   : (m.side === 0 ? imgs.malletB  : imgs.malletR);
     if (img) {
-      var d = m.r * 2.12;
+      var d = m.r * 2.12 * (numb ? ZAP_IMG_K : 1);
+      // しびれている間は小刻みに震える
+      var sx = 0, sy = 0;
+      if (numb) {
+        var amp = m.r * 0.10;
+        sx = (Math.random() - 0.5) * amp;
+        sy = (Math.random() - 0.5) * amp;
+      }
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.35)';
       ctx.shadowBlur = m.r * 0.45;
       ctx.shadowOffsetY = m.r * 0.18;
-      ctx.drawImage(img, m.x - d / 2, m.y - d / 2, d, d);
+      ctx.drawImage(img, m.x + sx - d / 2, m.y + sy - d / 2, d, d);
       ctx.restore();
       return;
     }
@@ -1219,6 +1347,68 @@
     ctx.beginPath(); ctx.arc(puck.x, puck.y, puck.r * 0.82, 0, 7); ctx.fill();
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.beginPath(); ctx.arc(puck.x - puck.r * 0.28, puck.y - puck.r * 0.3, puck.r * 0.24, 0, 7); ctx.fill();
+  }
+
+  function drawStars(t) {
+    var img = imgs.star;
+    var r = starR();
+    for (var s = 0; s < 2; s++) {
+      var st = stars[s];
+      if (!st) continue;
+      var pop = Math.min(1, st.t / 0.35);
+      var sc = 0.2 + 0.8 * (1 - Math.pow(1 - pop, 3));      // ふわっと出る
+      var bob = 1 + Math.sin(t * 3 + s) * 0.06;
+      ctx.save();
+      ctx.translate(st.x, st.y);
+      ctx.rotate(st.t * 2.2);                                // くるくる回る
+      ctx.scale(sc * bob, sc * bob);
+      if (img) ctx.drawImage(img, -r, -r, r * 2, r * 2);
+      else { ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill(); }
+      ctx.restore();
+    }
+  }
+
+  // 集めた数と、たまったときの必殺技ボタン
+  function drawCharge(t) {
+    var R = skillR();
+    for (var s = 0; s < 2; s++) {
+      if (players === 1 && s === 1 && charge[s] < STAR_NEED) {
+        // コンピューターぶんも見えるように、そのまま描く
+      }
+      var pos = skillBtnPos(s);
+      ctx.save();
+      ctx.translate(pos.x, pos.y);
+      if (s === 1) ctx.rotate(Math.PI);
+
+      if (charge[s] >= STAR_NEED) {
+        var pulse = 1 + Math.sin(t * 6) * 0.09;
+        ctx.save();
+        ctx.scale(pulse, pulse);
+        ctx.globalAlpha = 0.35 + Math.sin(t * 6) * 0.2;
+        ctx.fillStyle = '#ffe14d';
+        ctx.beginPath(); ctx.arc(0, 0, R * 1.35, 0, 7); ctx.fill();
+        ctx.globalAlpha = 1;
+        if (imgs.skill) ctx.drawImage(imgs.skill, -R, -R, R * 2, R * 2);
+        else { ctx.fillStyle = '#2f7dff'; ctx.beginPath(); ctx.arc(0, 0, R, 0, 7); ctx.fill(); }
+        ctx.restore();
+      } else {
+        var sr = R * 0.44, gap = sr * 2.3;
+        for (var i = 0; i < STAR_NEED; i++) {
+          var lx = (i - (STAR_NEED - 1) / 2) * gap;
+          if (i < charge[s]) {
+            if (imgs.star) ctx.drawImage(imgs.star, lx - sr, -sr, sr * 2, sr * 2);
+            else { ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(lx, 0, sr, 0, 7); ctx.fill(); }
+          } else {
+            ctx.globalAlpha = 0.45;
+            ctx.strokeStyle = '#5b7bb5';
+            ctx.lineWidth = Math.max(2, sr * 0.28);
+            ctx.beginPath(); ctx.arc(lx, 0, sr * 0.72, 0, 7); ctx.stroke();
+            ctx.globalAlpha = 1;
+          }
+        }
+      }
+      ctx.restore();
+    }
   }
 
   function drawResetBtn() {
@@ -1746,7 +1936,8 @@
     drawField();
     drawScore();
     if (mode !== 'janken') {          // じゃんけん中は盤上を空にしておく
-      drawFx();                       // マレットやパックの後ろに出す
+      drawStars(t);
+      drawCharge(t);
       if (mode !== 'goal' || modeTimer < 0.85) drawPuck();
       drawMallet(mallets[0]);
       drawMallet(mallets[1]);
