@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.11.0';
+  var APP_VERSION = '2.11.1';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -702,9 +702,10 @@
 
   // ---------------------------------------------------------------- 強打のエフェクト
   function addSmashFx(x, y, power) {
-    fx.push({ x: x, y: y, t: 0, life: 0.40,
+    // マレットが隠れないよう、マレットの大きさを基準にする
+    fx.push({ x: x, y: y, t: 0, life: 0.38,
               rot: Math.random() * Math.PI * 2,
-              size: puck.r * (7.5 + power * 4.5) });
+              size: mallets[0].r * (2.0 + power * 1.2) });
   }
 
   function updateFx(dt) {
@@ -720,7 +721,7 @@
     for (var i = 0; i < fx.length; i++) {
       var f = fx[i];
       var k = f.t / f.life;
-      var sc = 0.35 + 0.85 * (1 - Math.pow(1 - k, 2.6));   // ぱっと開いて
+      var sc = 0.40 + 0.70 * (1 - Math.pow(1 - k, 2.6));   // ぱっと開いて
       var a = k < 0.22 ? 1 : Math.max(0, 1 - (k - 0.22) / 0.78);
       var d = f.size * sc;
       ctx.save();
@@ -1742,10 +1743,10 @@
     drawField();
     drawScore();
     if (mode !== 'janken') {          // じゃんけん中は盤上を空にしておく
+      drawFx();                       // マレットやパックの後ろに出す
       if (mode !== 'goal' || modeTimer < 0.85) drawPuck();
       drawMallet(mallets[0]);
       drawMallet(mallets[1]);
-      drawFx();
     }
     drawResetBtn();   // マレットに隠れないよう最後に描く
     drawHomeBtn();
