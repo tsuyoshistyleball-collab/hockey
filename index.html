@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.9.0';
+  var APP_VERSION = '2.10.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -314,6 +314,46 @@
   function sndGoal()      { [523, 659, 784, 1047].forEach(function (f, i) { beep(f, 0.20, 'square', 0.15, i * 0.09); }); }
   function sndWin()       { [523, 659, 784, 1047, 784, 1047, 1319].forEach(function (f, i) { beep(f, 0.26, 'square', 0.16, i * 0.13); }); }
   function sndStart()     { [523, 784, 1047].forEach(function (f, i) { beep(f, 0.17, 'square', 0.16, i * 0.07); }); }
+
+  // 強く打ったときの「バシーン！」
+  function sndSmash(power) {
+    var a = audio();
+    if (!a) return;
+    var t = a.currentTime;
+    var vol = 0.15 + power * 0.15;
+
+    // ドン（低い衝撃）
+    var o = a.createOscillator(), g = a.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(240, t);
+    o.frequency.exponentialRampToValueAtTime(55, t + 0.16);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.20);
+    o.connect(g); g.connect(a.destination);
+    o.start(t); o.stop(t + 0.22);
+
+    // パーン（はじける音）
+    var len = Math.floor(a.sampleRate * 0.12);
+    var buf = a.createBuffer(1, len, a.sampleRate);
+    var ch = buf.getChannelData(0);
+    for (var i = 0; i < len; i++) {
+      ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5);
+    }
+    var src = a.createBufferSource();
+    src.buffer = buf;
+    var bp = a.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(2700, t);
+    bp.frequency.exponentialRampToValueAtTime(850, t + 0.10);
+    bp.Q.value = 1.2;
+    var ng = a.createGain();
+    ng.gain.value = vol * 0.85;
+    src.connect(bp); bp.connect(ng); ng.connect(a.destination);
+    src.start(t); src.stop(t + 0.13);
+
+    // キン（高く抜ける音）
+    beep(880 + power * 520, 0.08, 'square', 0.05 + power * 0.07);
+  }
 
   // 開始の合図「ピー！」
   function sndWhistle() {
@@ -712,6 +752,7 @@
   var HIT_MIN     = 0.46;   // そっと当てたとき、マレットの速さの何倍でパックが動くか
   var HIT_MAX     = 1.70;   // 強く当てたとき
   var HIT_COOL    = 0.09;   // 同じマレットが続けて当たらない時間（秒）
+  var SMASH_AT    = 0.50;   // これ以上の強さで当たったら、強打の音になる
   var WALL_BOUNCE = 0.93;
 
   // k = この刻みで、残りの距離のうちどれだけ進むか（最後の刻みで k=1 になる）
@@ -840,14 +881,18 @@
       sp = minSp;
     }
     var power = Math.min(1, sp / (PUCK_MAX * F.w));
-    sndHit(power);
+    if (power >= SMASH_AT) sndSmash(power);      // 強打は専用の音
+    else                   sndHit(power);
     buzz(power);
   }
 
   // 打った手ごたえ（対応している端末だけ震える）
   function buzz(power) {
     if (!navigator.vibrate || power < 0.06) return;   // そっと当てたときは震えない
-    try { navigator.vibrate(Math.round(8 + power * 42)); } catch (e) {}
+    try {
+      if (power >= SMASH_AT) navigator.vibrate([30, 35, Math.round(35 + power * 45)]);
+      else navigator.vibrate(Math.round(8 + power * 42));
+    } catch (e) {}
   }
 
   function clampPuckSpeed() {
