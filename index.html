@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.6.2';
+  var APP_VERSION = '2.6.3';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -661,10 +661,10 @@
 
   // ---------------------------------------------------------------- 物理
   var MAL_SPEED   = 3.2;    // 盤面の幅/秒
-  var PUCK_MAX    = 1.30;   // パックの最高速度。小さいほどゆっくりでやさしい
+  var PUCK_MAX    = 1.75;   // パックの最高速度。小さいほどゆっくりでやさしい
   var REST        = 0.35;   // 止まっているマレットに当たったとき、どれだけ返るか
   var HIT_MIN     = 0.46;   // そっと当てたとき、マレットの速さの何倍でパックが動くか
-  var HIT_MAX     = 0.92;   // 強く当てたとき
+  var HIT_MAX     = 1.30;   // 強く当てたとき
   var HIT_COOL    = 0.09;   // 同じマレットが続けて当たらない時間（秒）
   var WALL_BOUNCE = 0.93;
 
