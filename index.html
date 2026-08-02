@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.10.0';
+  var APP_VERSION = '2.11.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -46,6 +46,7 @@
     i.src = src;
   }
   loadImg('ttlStage','ttl-stage.png');
+  loadImg('fxSmash', 'fx-smash.png');
   loadImg('bg',      'title-bg.jpg');
   loadImg('side',    'side.jpg');
   loadImg('jk0',     'jk-0.png');
@@ -165,6 +166,7 @@
   var shake      = 0;
   var trail      = [];
   var parts      = [];       // タップの粒
+  var fx         = [];       // 強打のエフェクト
   var pressIdx   = -1;       // 押されたボタン
   var pressT     = 0;
 
@@ -600,6 +602,7 @@
   function newGame() {
     score[0] = score[1] = 0;
     flash = 0; shake = 0;
+    fx.length = 0;
     battleBgm();
     placeAll();
     startJanken();          // 先行後攻はじゃんけんで決める
@@ -607,6 +610,7 @@
 
   function goTitle() {
     mode = 'title'; modeTimer = 0;
+    fx.length = 0;
     pressIdx = -1; pressT = 0;
     resetPid = null; resetHold = 0;
     homePid = null; homeHold = 0;
@@ -692,6 +696,39 @@
       ctx.globalAlpha = k;
       ctx.fillStyle = p.col;
       ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (0.45 + k * 0.55), 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------------------------------------------------------------- 強打のエフェクト
+  function addSmashFx(x, y, power) {
+    fx.push({ x: x, y: y, t: 0, life: 0.40,
+              rot: Math.random() * Math.PI * 2,
+              size: puck.r * (7.5 + power * 4.5) });
+  }
+
+  function updateFx(dt) {
+    for (var i = fx.length - 1; i >= 0; i--) {
+      fx[i].t += dt;
+      if (fx[i].t >= fx[i].life) fx.splice(i, 1);
+    }
+  }
+
+  function drawFx() {
+    var img = imgs.fxSmash;
+    if (!img) return;
+    for (var i = 0; i < fx.length; i++) {
+      var f = fx[i];
+      var k = f.t / f.life;
+      var sc = 0.35 + 0.85 * (1 - Math.pow(1 - k, 2.6));   // ぱっと開いて
+      var a = k < 0.22 ? 1 : Math.max(0, 1 - (k - 0.22) / 0.78);
+      var d = f.size * sc;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.translate(f.x, f.y);
+      ctx.rotate(f.rot + k * 0.35);
+      ctx.drawImage(img, -d / 2, -d / 2, d, d);
+      ctx.restore();
     }
     ctx.globalAlpha = 1;
   }
@@ -881,8 +918,12 @@
       sp = minSp;
     }
     var power = Math.min(1, sp / (PUCK_MAX * F.w));
-    if (power >= SMASH_AT) sndSmash(power);      // 強打は専用の音
-    else                   sndHit(power);
+    if (power >= SMASH_AT) {
+      sndSmash(power);                           // 強打は専用の音とエフェクト
+      addSmashFx(m.x + nx * m.r, m.y + ny * m.r, power);
+    } else {
+      sndHit(power);
+    }
     buzz(power);
   }
 
@@ -903,6 +944,7 @@
 
   function update(dt) {
     updateParts(dt);
+    updateFx(dt);
     wallCool -= dt;
     if (flash > 0) flash = Math.max(0, flash - dt * 2.6);
     if (shake > 0) shake = Math.max(0, shake - dt * 3.0);
@@ -1703,6 +1745,7 @@
       if (mode !== 'goal' || modeTimer < 0.85) drawPuck();
       drawMallet(mallets[0]);
       drawMallet(mallets[1]);
+      drawFx();
     }
     drawResetBtn();   // マレットに隠れないよう最後に描く
     drawHomeBtn();
