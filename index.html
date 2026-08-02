@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.6.3';
+  var APP_VERSION = '2.7.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -182,7 +182,7 @@
   var JK_WAIT  = 8;          // 片方だけ選んで止まらないための待ち時間（秒）
 
   // コンピューター（4歳児が勝てるようにかなり弱くしている）
-  var AI_SPEED = 0.95;       // 盤面の幅/秒（人は 3.2）
+  var AI_SPEED = 0.95;       // 盤面の幅/秒（人は 8.0）
   var ai = { think:0, errX:0, rest:0, jkT:0 };
 
   // ---------------------------------------------------------------- 配置
@@ -660,11 +660,11 @@
   }
 
   // ---------------------------------------------------------------- 物理
-  var MAL_SPEED   = 3.2;    // 盤面の幅/秒
-  var PUCK_MAX    = 1.75;   // パックの最高速度。小さいほどゆっくりでやさしい
+  var MAL_SPEED   = 8.0;    // 盤面の幅/秒。大きいほど指にぴったり付いてくる
+  var PUCK_MAX    = 2.25;   // パックの最高速度。小さいほどゆっくりでやさしい
   var REST        = 0.35;   // 止まっているマレットに当たったとき、どれだけ返るか
   var HIT_MIN     = 0.46;   // そっと当てたとき、マレットの速さの何倍でパックが動くか
-  var HIT_MAX     = 1.30;   // 強く当てたとき
+  var HIT_MAX     = 1.70;   // 強く当てたとき
   var HIT_COOL    = 0.09;   // 同じマレットが続けて当たらない時間（秒）
   var WALL_BOUNCE = 0.93;
 
@@ -874,7 +874,7 @@
     }
 
     var frozen = (mode !== 'play') || isLandscape();
-    var N = 6, sdt = dt / N;
+    var N = 8, sdt = dt / N;
 
     for (var s2 = 0; s2 < N; s2++) {
       stepMallet(mallets[0], sdt);
