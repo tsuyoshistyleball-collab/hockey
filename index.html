@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '2.7.0';
+  var APP_VERSION = '2.9.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -171,6 +171,9 @@
   var resetBtn   = { x:0, y:0, r:0 };
   var resetPid   = null;     // リセットは長押しでのみ発動（誤タップ防止）
   var resetHold  = 0;
+  var homeBtn    = { x:0, y:0, r:0 };
+  var homePid    = null;     // タイトルに戻るのも長押し
+  var homeHold   = 0;
   var RESET_HOLD = 0.9;
 
   // じゃんけん（試合の最初だけ。勝った方がパックをもらえる）
@@ -182,7 +185,7 @@
   var JK_WAIT  = 8;          // 片方だけ選んで止まらないための待ち時間（秒）
 
   // コンピューター（4歳児が勝てるようにかなり弱くしている）
-  var AI_SPEED = 0.95;       // 盤面の幅/秒（人は 8.0）
+  var AI_SPEED = 0.95;       // 盤面の幅/秒（人のマレットは指の位置そのもの）
   var ai = { think:0, errX:0, rest:0, jkT:0 };
 
   // ---------------------------------------------------------------- 配置
@@ -215,6 +218,9 @@
     resetBtn.r = Math.min(margin * 0.42, s * 0.055);
     resetBtn.x = IMG.x + margin * 0.5;
     resetBtn.y = F.cy;
+    homeBtn.r = resetBtn.r;                      // 右の枠に、タイトルへ戻るボタン
+    homeBtn.x = IMG.x + IMG.w - margin * 0.5;
+    homeBtn.y = F.cy;
 
     if (!prevW || !prevH) {
       placeAll();
@@ -411,6 +417,12 @@
     return { x: cx0, y: top + h / 2 + row * (h + gapY), w: w, h: h };
   }
 
+  // メニュー画面の「もどる」
+  function backBtnRect() {
+    var r = Math.min(W, H) * 0.048;
+    return { x: Math.max(TIMG.x, 0) + r * 1.8, y: Math.max(TIMG.y, 0) + r * 2.0, r: r };
+  }
+
   function onDown(e) {
     audio();
     var p = pointerPos(e);
@@ -422,6 +434,15 @@
       if (hitRect(p, rs)) { pressIdx = 0; pressT = 0; burst(rs.x, rs.y, 30, W * 1.6); sndStart(); }
       else { burst(p.x, p.y, 5, W * 0.55); sndTick(); }
       return;
+    }
+
+    if (mode === 'select' || mode === 'stage') {
+      var bb = backBtnRect();
+      if (pressIdx < 0 && dist2(p.x, p.y, bb.x, bb.y) < bb.r * bb.r * 2.2) {
+        burst(bb.x, bb.y, 10, W * 0.7); sndTick();
+        mode = (mode === 'stage') ? 'select' : 'title';
+        return;
+      }
     }
 
     if (mode === 'select') {
@@ -450,6 +471,11 @@
     // リセットボタン（長押しで発動）
     if (dist2(p.x, p.y, resetBtn.x, resetBtn.y) < resetBtn.r * resetBtn.r * 4) {
       resetPid = e.pointerId; resetHold = 0;
+      return;
+    }
+    // タイトルへ戻るボタン（長押しで発動）
+    if (dist2(p.x, p.y, homeBtn.x, homeBtn.y) < homeBtn.r * homeBtn.r * 4) {
+      homePid = e.pointerId; homeHold = 0;
       return;
     }
 
@@ -491,6 +517,13 @@
       }
       return;
     }
+    if (homePid === e.pointerId) {
+      p = pointerPos(e);
+      if (dist2(p.x, p.y, homeBtn.x, homeBtn.y) > homeBtn.r * homeBtn.r * 9) {
+        homePid = null; homeHold = 0;
+      }
+      return;
+    }
     for (var i = 0; i < 2; i++) {
       var m = mallets[i];
       if (m.pid === e.pointerId) {
@@ -503,6 +536,7 @@
 
   function onUp(e) {
     if (resetPid === e.pointerId) { resetPid = null; resetHold = 0; }
+    if (homePid === e.pointerId) { homePid = null; homeHold = 0; }
     for (var i = 0; i < 2; i++) {
       if (mallets[i].pid === e.pointerId) mallets[i].pid = null;
     }
@@ -529,6 +563,16 @@
     battleBgm();
     placeAll();
     startJanken();          // 先行後攻はじゃんけんで決める
+  }
+
+  function goTitle() {
+    mode = 'title'; modeTimer = 0;
+    pressIdx = -1; pressT = 0;
+    resetPid = null; resetHold = 0;
+    homePid = null; homeHold = 0;
+    mallets[0].pid = mallets[1].pid = null;
+    showHint = true;
+    titleBgm();
   }
 
   function startJanken() {
@@ -635,8 +679,11 @@
       return;
     }
 
-    // パックが動けなくなっているときは、押し続けずに一度離れる
-    if (idleTime > 0.6) {
+    // 壁ぎわで動けなくなっているときだけ、押し続けずに一度離れる。
+    // 盤の真ん中で止まっているときは、ちゃんと取りに行く
+    var edge = (m.r + puck.r) * 1.6;
+    var atWall = puck.x < F.x + edge || puck.x > F.x + F.w - edge || puck.y < F.y + edge;
+    if (idleTime > 0.6 && atWall) {
       m.tx = F.cx + (puck.x - F.cx) * 0.5;
       m.ty = home;
       clampTarget(m);
@@ -660,7 +707,6 @@
   }
 
   // ---------------------------------------------------------------- 物理
-  var MAL_SPEED   = 8.0;    // 盤面の幅/秒。大きいほど指にぴったり付いてくる
   var PUCK_MAX    = 2.25;   // パックの最高速度。小さいほどゆっくりでやさしい
   var REST        = 0.35;   // 止まっているマレットに当たったとき、どれだけ返るか
   var HIT_MIN     = 0.46;   // そっと当てたとき、マレットの速さの何倍でパックが動くか
@@ -668,14 +714,23 @@
   var HIT_COOL    = 0.09;   // 同じマレットが続けて当たらない時間（秒）
   var WALL_BOUNCE = 0.93;
 
-  function stepMallet(m, sdt) {
-    var maxV = (m.side === 1 && players === 1 ? AI_SPEED : MAL_SPEED) * F.w;
-    var dx = m.tx - m.x, dy = m.ty - m.y;
-    var d = Math.sqrt(dx * dx + dy * dy);
-    var step = maxV * sdt;
+  // k = この刻みで、残りの距離のうちどれだけ進むか（最後の刻みで k=1 になる）
+  function stepMallet(m, sdt, k) {
     var nx, ny;
-    if (d <= step || d === 0) { nx = m.tx; ny = m.ty; }
-    else { nx = m.x + dx / d * step; ny = m.y + dy / d * step; }
+    if (m.side === 1 && players === 1) {
+      // コンピューターだけ速さの上限がある
+      var maxV = AI_SPEED * F.w;
+      var dx = m.tx - m.x, dy = m.ty - m.y;
+      var d = Math.sqrt(dx * dx + dy * dy);
+      var step = maxV * sdt;
+      if (d <= step || d === 0) { nx = m.tx; ny = m.ty; }
+      else { nx = m.x + dx / d * step; ny = m.y + dy / d * step; }
+    } else {
+      // 人のマレットは指の位置そのもの。1コマの中で細かく分けて動かし、
+      // 途中にあるパックを飛び越さないようにする
+      nx = m.x + (m.tx - m.x) * k;
+      ny = m.y + (m.ty - m.y) * k;
+    }
     m.vx = (nx - m.x) / sdt;
     m.vy = (ny - m.y) / sdt;
     m.x = nx; m.y = ny;
@@ -830,6 +885,14 @@
         newGame();
       }
     }
+    if (homePid !== null) {
+      homeHold += dt;
+      if (homeHold >= RESET_HOLD) {
+        homePid = null; homeHold = 0;
+        beep(660, 0.16, 'square', 0.14);
+        goTitle();
+      }
+    }
 
     if (mode === 'goal') {
       modeTimer += dt;
@@ -874,11 +937,20 @@
     }
 
     var frozen = (mode !== 'play') || isLandscape();
-    var N = 8, sdt = dt / N;
+
+    // 動く量に合わせて刻みの数を決める（速く指を動かしても飛び越さない）
+    var need = Math.max(Math.abs(puck.vx * dt), Math.abs(puck.vy * dt));
+    for (var mi3 = 0; mi3 < 2; mi3++) {
+      var m3 = mallets[mi3];
+      need = Math.max(need, Math.abs(m3.tx - m3.x), Math.abs(m3.ty - m3.y));
+    }
+    var N = Math.min(24, Math.max(8, Math.ceil(need / Math.max(1, puck.r * 0.8))));
+    var sdt = dt / N;
 
     for (var s2 = 0; s2 < N; s2++) {
-      stepMallet(mallets[0], sdt);
-      stepMallet(mallets[1], sdt);
+      var kk = 1 / (N - s2);
+      stepMallet(mallets[0], sdt, kk);
+      stepMallet(mallets[1], sdt, kk);
       if (frozen) continue;
       if (stepPuck(sdt)) break;
       collide(mallets[0]);
@@ -1086,6 +1158,37 @@
       ctx.beginPath();
       ctx.arc(resetBtn.x, resetBtn.y, resetBtn.r * 0.86,
               -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (resetHold / RESET_HOLD));
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  function drawHomeBtn() {
+    var b = homeBtn, r = b.r;
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, 7); ctx.fill();
+    // おうちの絵
+    ctx.fillStyle = '#1b4ea8';
+    ctx.beginPath();
+    ctx.moveTo(b.x, b.y - r * 0.52);
+    ctx.lineTo(b.x + r * 0.56, b.y - r * 0.02);
+    ctx.lineTo(b.x - r * 0.56, b.y - r * 0.02);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillRect(b.x - r * 0.34, b.y - r * 0.04, r * 0.68, r * 0.52);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(b.x - r * 0.12, b.y + r * 0.14, r * 0.24, r * 0.34);
+    ctx.restore();
+
+    if (homePid !== null) {
+      ctx.save();
+      ctx.strokeStyle = '#1b4ea8';
+      ctx.lineWidth = Math.max(3, r * 0.2);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, r * 0.86, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (homeHold / RESET_HOLD));
       ctx.stroke();
       ctx.restore();
     }
@@ -1432,6 +1535,22 @@
     ctx.restore();
   }
 
+  function drawBackBtn(t) {
+    var b = backBtnRect();
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 7); ctx.fill();
+    ctx.fillStyle = '#1b4ea8';
+    ctx.beginPath();
+    ctx.moveTo(b.x - b.r * 0.34, b.y);
+    ctx.lineTo(b.x + b.r * 0.22, b.y - b.r * 0.42);
+    ctx.lineTo(b.x + b.r * 0.22, b.y + b.r * 0.42);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
   function drawVersion() {
     ctx.save();
     ctx.textAlign = 'left';
@@ -1456,6 +1575,7 @@
 
     drawFloatBtn(imgs.solo, modeBtnRect(0), t, 0,   pressIdx === 0, 'ひとりで');
     drawFloatBtn(imgs.duo,  modeBtnRect(1), t, 1.2, pressIdx === 1, 'ふたりで');
+    drawBackBtn(t);
   }
 
   function drawStage(t) {
@@ -1507,6 +1627,7 @@
       ctx.restore();
     }
     ctx.globalAlpha = 1;
+    drawBackBtn(t);
     drawVersion();
   }
 
@@ -1539,6 +1660,7 @@
       drawMallet(mallets[1]);
     }
     drawResetBtn();   // マレットに隠れないよう最後に描く
+    drawHomeBtn();
 
     if (showHint && mode === 'play') drawHint(t);
     if (mode === 'goal') drawGoalBanner();
