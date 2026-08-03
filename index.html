@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '3.3.2';
+  var APP_VERSION = '3.4.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -755,9 +755,27 @@
       parts.push({
         x: x, y: y,
         vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - spread * 0.3,
-        life: 0.5 + Math.random() * 0.55, t: 0,
+        life: 0.5 + Math.random() * 0.55, t: 0, g: 1,
         r: W * (0.007 + Math.random() * 0.015),
         col: PART_COL[Math.floor(Math.random() * PART_COL.length)]
+      });
+    }
+  }
+
+  // 壁に当たったときの火花
+  var SPARK_COL = ['#fff7cf', '#ffd94d', '#ffab3a', '#ffffff'];
+  function sparks(x, y, nx, ny, power) {
+    var n = 4 + Math.round(power * 8);
+    var base = Math.atan2(ny, nx);
+    for (var i = 0; i < n; i++) {
+      var ang = base + (Math.random() - 0.5) * 1.8;
+      var sp = (0.3 + Math.random() * 0.7) * F.w * (0.35 + power * 0.9);
+      parts.push({
+        x: x, y: y,
+        vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+        life: 0.16 + Math.random() * 0.20, t: 0, g: 0,
+        r: F.w * (0.0048 + Math.random() * 0.0075),
+        col: SPARK_COL[Math.floor(Math.random() * SPARK_COL.length)]
       });
     }
   }
@@ -768,8 +786,9 @@
       p.t += dt;
       if (p.t >= p.life) { parts.splice(i, 1); continue; }
       p.x += p.vx * dt; p.y += p.vy * dt;
-      p.vy += W * 1.4 * dt;
-      p.vx *= Math.pow(0.5, dt);
+      if (p.g) p.vy += W * 1.4 * dt;
+      var dr = Math.pow(p.g ? 0.5 : 0.02, dt);   // 火花はすぐ止まる
+      p.vx *= dr; if (!p.g) p.vy *= dr;
     }
   }
 
@@ -980,15 +999,15 @@
     var inGoalX = Math.abs(puck.x - F.cx) < gh;
     var left = F.x, right = F.x + F.w, top = F.y, bottom = F.y + F.h;
 
-    if (puck.x - puck.r < left)   { bump(Math.abs(puck.vx)); puck.x = left + puck.r;   puck.vx = Math.abs(puck.vx) * WALL_BOUNCE; }
-    if (puck.x + puck.r > right)  { bump(Math.abs(puck.vx)); puck.x = right - puck.r;  puck.vx = -Math.abs(puck.vx) * WALL_BOUNCE; }
+    if (puck.x - puck.r < left)   { bump(Math.abs(puck.vx), left, puck.y, 1, 0);  puck.x = left + puck.r;   puck.vx = Math.abs(puck.vx) * WALL_BOUNCE; }
+    if (puck.x + puck.r > right)  { bump(Math.abs(puck.vx), right, puck.y, -1, 0); puck.x = right - puck.r;  puck.vx = -Math.abs(puck.vx) * WALL_BOUNCE; }
 
     // 上のゴール（入ると下のプレイヤーの得点）
     if (puck.y - puck.r < top) {
       if (inGoalX) {
         if (puck.y < top - puck.r * 0.4) { scoreGoal(0); return true; }
       } else {
-        bump(Math.abs(puck.vy)); puck.y = top + puck.r; puck.vy = Math.abs(puck.vy) * WALL_BOUNCE;
+        bump(Math.abs(puck.vy), puck.x, top, 0, 1); puck.y = top + puck.r; puck.vy = Math.abs(puck.vy) * WALL_BOUNCE;
       }
     }
     // 下のゴール（入ると上のプレイヤーの得点）
@@ -996,17 +1015,22 @@
       if (inGoalX) {
         if (puck.y > bottom + puck.r * 0.4) { scoreGoal(1); return true; }
       } else {
-        bump(Math.abs(puck.vy)); puck.y = bottom - puck.r; puck.vy = -Math.abs(puck.vy) * WALL_BOUNCE;
+        bump(Math.abs(puck.vy), puck.x, bottom, 0, -1); puck.y = bottom - puck.r; puck.vy = -Math.abs(puck.vy) * WALL_BOUNCE;
       }
     }
     return false;
   }
 
-  var wallCool = 0;
-  function bump(v) {
+  var wallCool = 0, sparkCool = 0;
+  function bump(v, x, y, nx, ny) {
+    var power = Math.min(1, v / (PUCK_MAX * F.w));
+    if (v >= 0.10 * F.w && sparkCool <= 0) {
+      sparks(x, y, nx, ny, power);       // 軽く火花が散る
+      sparkCool = 0.05;
+    }
     if (wallCool > 0) return;
     if (v < 0.13 * F.w) return;          // かすっただけなら鳴らさない
-    sndWall(Math.min(1, v / (PUCK_MAX * F.w)));
+    sndWall(power);
     wallCool = 0.13;
   }
 
@@ -1100,7 +1124,7 @@
     updateParts(dt);
     updateZapFx(dt);
     if (mode === 'play') updateStars(dt);
-    wallCool -= dt;
+    wallCool -= dt; sparkCool -= dt;
     if (flash > 0) flash = Math.max(0, flash - dt * 2.6);
     if (shake > 0) shake = Math.max(0, shake - dt * 3.0);
 
