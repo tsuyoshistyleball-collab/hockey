@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '3.2.0';
+  var APP_VERSION = '3.3.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -64,7 +64,6 @@
   loadImg('num3',    'num-3.png');
   loadImg('malletR', 'mallet-red.png');
   loadImg('malletB', 'mallet-blue.png');
-  loadImg('puck',    'puck.png');
 
   // ---------------------------------------------------------------- 音楽
   var tracks = {};
@@ -112,18 +111,21 @@
   // 各ステージの盤面と、その絵の中での氷の範囲・ゴールの幅・センターラインの位置
   // （すべて画像サイズに対する割合）
   var STAGES = [
-    { key:'ice',    src:'field-3.jpg',
+    { key:'ice',    src:'field-3.jpg',     puck:'puck-ice.png',    tc:'#1a1a20',
       fld:{ x0:0.0680, x1:0.9278, y0:0.0826, y1:0.9223, mid:0.4926, goal:0.1629, circle:0.093 } },
-    { key:'forest', src:'stage-forest.jpg',
+    { key:'forest', src:'stage-forest.jpg', puck:'puck-forest.png', tc:'#2f6b26',
       fld:{ x0:0.0820, x1:0.9180, y0:0.0740, y1:0.9208, mid:0.4952, goal:0.1585, circle:0.093 } },
-    { key:'water',  src:'stage-water.jpg',
+    { key:'water',  src:'stage-water.jpg',  puck:'puck-water.png',  tc:'#1a80bd',
       fld:{ x0:0.0820, x1:0.9180, y0:0.0740, y1:0.9208, mid:0.4952, goal:0.1585, circle:0.093 } },
-    { key:'lava',   src:'stage-lava.jpg',
+    { key:'lava',   src:'stage-lava.jpg',   puck:'puck-lava.png',   tc:'#d0430a',
       fld:{ x0:0.0820, x1:0.9180, y0:0.0740, y1:0.9208, mid:0.4952, goal:0.1585, circle:0.093 } }
   ];
   var stageIdx = 0;
   var FLD = STAGES[0].fld;
-  STAGES.forEach(function (st, i) { loadImg('stage' + i, st.src); });
+  STAGES.forEach(function (st, i) {
+    loadImg('stage' + i, st.src);
+    loadImg('puck' + i, st.puck);
+  });
   var F = { x:0, y:0, w:0, h:0, cx:0, cy:0 };   // 盤面（氷）の位置
   var IMG  = { x:0, y:0, w:0, h:0 };            // field-3.jpg を描く位置
   var TIMG = { x:0, y:0, w:0, h:0 };            // title-bg.jpg を描く位置
@@ -1359,17 +1361,17 @@
   }
 
   function drawPuck() {
-    var img = imgs.puck;
+    var img = imgs['puck' + stageIdx];
     for (var i = 0; i < trail.length; i++) {
       var t = trail[i];
-      ctx.globalAlpha = (i + 1) / trail.length * (img ? 0.14 : 0.22);
-      ctx.fillStyle = img ? '#1a1a20' : COL.puck;
+      ctx.globalAlpha = (i + 1) / trail.length * (img ? 0.16 : 0.22);
+      ctx.fillStyle = img ? STAGES[stageIdx].tc : COL.puck;
       ctx.beginPath(); ctx.arc(t.x, t.y, puck.r * 0.85, 0, 7); ctx.fill();
     }
     ctx.globalAlpha = 1;
 
     if (img) {
-      var d = puck.r * 2.15;
+      var d = puck.r * 2.37;      // 絵は円盤のまわりに1割の余白がある
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.4)';
       ctx.shadowBlur = puck.r * 0.5;
