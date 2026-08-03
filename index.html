@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '3.0.1';
+  var APP_VERSION = '3.1.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -148,9 +148,13 @@
   var mallets = [
     // side 0 = 下(プレイヤー1) / side 1 = 上(プレイヤー2 またはコンピューター)
     // svx/svy = 見た目どおりの速さ（数フレームならした値）。当たりの強さはこれで決める
-    { side:0, x:0, y:0, tx:0, ty:0, vx:0, vy:0, lx:0, ly:0, svx:0, svy:0,
+    // tx/ty = 指の位置 / gx/gy = 先読みを足した目標
+    // svx/svy = 見た目どおりの速さ（当たりの強さに使う）
+    { side:0, x:0, y:0, tx:0, ty:0, gx:0, gy:0, ltx:0, lty:0, fvx:0, fvy:0,
+      vx:0, vy:0, lx:0, ly:0, svx:0, svy:0,
       r:0, pid:null, hitCool:0, col:COL.p1, dark:COL.p1dark },
-    { side:1, x:0, y:0, tx:0, ty:0, vx:0, vy:0, lx:0, ly:0, svx:0, svy:0,
+    { side:1, x:0, y:0, tx:0, ty:0, gx:0, gy:0, ltx:0, lty:0, fvx:0, fvy:0,
+      vx:0, vy:0, lx:0, ly:0, svx:0, svy:0,
       r:0, pid:null, hitCool:0, col:COL.p2, dark:COL.p2dark }
   ];
 
@@ -271,7 +275,9 @@
     m1.x = m1.tx = F.cx; m1.y = m1.ty = F.y + F.h * 0.20;
     m0.vx = m0.vy = m1.vx = m1.vy = 0;
     m0.svx = m0.svy = m1.svx = m1.svy = 0;
-    m0.lx = m0.x; m0.ly = m0.y; m1.lx = m1.x; m1.ly = m1.y;
+    m0.fvx = m0.fvy = m1.fvx = m1.fvy = 0;
+    m0.lx = m0.ltx = m0.gx = m0.x; m0.ly = m0.lty = m0.gy = m0.y;
+    m1.lx = m1.ltx = m1.gx = m1.x; m1.ly = m1.lty = m1.gy = m1.y;
   }
 
   function resetPuck() {
@@ -647,6 +653,13 @@
     }
   }
 
+  // 先読みを足した目標も、盤の外や相手の陣にはみ出さないようにする
+  function clampGoal(m) {
+    m.gx = clamp(m.gx, F.x + m.r, F.x + F.w - m.r);
+    if (m.side === 0) m.gy = clamp(m.gy, F.cy + m.r * 0.1, F.y + F.h - m.r);
+    else              m.gy = clamp(m.gy, F.y + m.r, F.cy - m.r * 0.1);
+  }
+
   function clampTarget(m) {
     m.tx = clamp(m.tx, F.x + m.r, F.x + F.w - m.r);
     if (m.side === 0) m.ty = clamp(m.ty, F.cy + m.r * 0.1, F.y + F.h - m.r);
@@ -655,6 +668,8 @@
 
   cvs.addEventListener('pointerdown',   onDown, { passive:true });
   cvs.addEventListener('pointermove',   onMove, { passive:true });
+  // Chrome はこちらの方が早く届く（未対応なら無視される）
+  cvs.addEventListener('pointerrawupdate', onMove, { passive:true });
   cvs.addEventListener('pointerup',     onUp,   { passive:true });
   cvs.addEventListener('pointercancel', onUp,   { passive:true });
   document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
@@ -904,6 +919,7 @@
 
   // ---------------------------------------------------------------- 物理
   var PUCK_MAX    = 2.25;   // パックの最高速度。小さいほどゆっくりでやさしい
+  var LEAD_TIME   = 0.020;  // 指の動きを何秒ぶん先読みするか（追従の遅れを埋める）
   var REST        = 0.35;   // 止まっているマレットに当たったとき、どれだけ返るか
   var HIT_MIN     = 0.46;   // そっと当てたとき、マレットの速さの何倍でパックが動くか
   var HIT_MAX     = 1.70;   // 強く当てたとき
@@ -916,7 +932,8 @@
     var nx, ny;
     if (zap[m.side] > 0) {          // しびれている間は動けない
       m.vx = 0; m.vy = 0;
-      m.tx = m.x; m.ty = m.y;
+      m.tx = m.gx = m.x; m.ty = m.gy = m.y;
+      m.fvx = m.fvy = 0;
       return;
     }
     if (m.side === 1 && players === 1) {
@@ -930,8 +947,8 @@
     } else {
       // 人のマレットは指の位置そのもの。1コマの中で細かく分けて動かし、
       // 途中にあるパックを飛び越さないようにする
-      nx = m.x + (m.tx - m.x) * k;
-      ny = m.y + (m.ty - m.y) * k;
+      nx = m.x + (m.gx - m.x) * k;
+      ny = m.y + (m.gy - m.y) * k;
     }
     m.vx = (nx - m.x) / sdt;
     m.vy = (ny - m.y) / sdt;
@@ -1135,6 +1152,20 @@
     for (var mi = 0; mi < 2; mi++) {
       var mm = mallets[mi];
       mm.hitCool = Math.max(0, mm.hitCool - dt);
+
+      // 指の速さをならして、1コマぶん先を目標にする。
+      // ブラウザが指の位置を届けるまでの遅れを埋めるため
+      var fa = Math.min(1, dt / 0.045);
+      mm.fvx += ((mm.tx - mm.ltx) / dt - mm.fvx) * fa;
+      mm.fvy += ((mm.ty - mm.lty) / dt - mm.fvy) * fa;
+      mm.ltx = mm.tx; mm.lty = mm.ty;
+      var lead = Math.min(LEAD_TIME, dt * 1.2);
+      var lx2 = mm.fvx * lead, ly2 = mm.fvy * lead;
+      var lmax = mm.r * 1.1;
+      var ll = Math.sqrt(lx2 * lx2 + ly2 * ly2);
+      if (ll > lmax) { lx2 = lx2 / ll * lmax; ly2 = ly2 / ll * lmax; }
+      mm.gx = mm.tx + lx2; mm.gy = mm.ty + ly2;
+      clampGoal(mm);
       // 指の位置へ一気に追いつくぶん、瞬間の速さは実際より大きく出る。
       // 1コマぶんの移動をならして、見た目どおりの速さにする
       var a = Math.min(1, dt / 0.05);
@@ -1149,7 +1180,7 @@
     var need = Math.max(Math.abs(puck.vx * dt), Math.abs(puck.vy * dt));
     for (var mi3 = 0; mi3 < 2; mi3++) {
       var m3 = mallets[mi3];
-      need = Math.max(need, Math.abs(m3.tx - m3.x), Math.abs(m3.ty - m3.y));
+      need = Math.max(need, Math.abs(m3.gx - m3.x), Math.abs(m3.gy - m3.y));
     }
     var N = Math.min(24, Math.max(8, Math.ceil(need / Math.max(1, puck.r * 0.8))));
     var sdt = dt / N;
