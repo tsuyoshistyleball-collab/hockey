@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '3.8.0';
+  var APP_VERSION = '3.8.1';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -845,9 +845,10 @@
   // kind 0 = しびれさせる技（下）/ kind 1 = 2つに分かれる技（その上）。
   // 上下どちらの人から見ても、自分の左に同じ並びで見える
   function skillBtnPos(side, kind) {
-    var up = (kind === 1) ? skillR() * 2.6 : 0;
-    return {
-      x: side === 0 ? F.x + F.w * 0.15 : F.x + F.w * 0.85,
+    var R = skillR();
+    var up = (kind === 1) ? R * 2.6 : 0;
+    return {                                   // 盤の左のふちぎりぎりに寄せる
+      x: side === 0 ? F.x + R * 1.15 : F.x + F.w - R * 1.15,
       y: side === 0 ? F.y + F.h * 0.945 - up : F.y + F.h * 0.055 + up
     };
   }
@@ -1699,17 +1700,18 @@
         ctx.save();
         ctx.translate(pos.x, pos.y);
         if (s === 1) ctx.rotate(Math.PI);
+        // ボタンと同じく、ふちに沿ってたてに並べる（横だと壁からはみ出す）
         var sr = R * 0.44, gap = sr * 2.3;
         for (var i = 0; i < STAR_NEED; i++) {
-          var lx = (i - (STAR_NEED - 1) / 2) * gap;
+          var ly = -i * gap;
           if (i < charge[s]) {
-            if (imgs.star) ctx.drawImage(imgs.star, lx - sr, -sr, sr * 2, sr * 2);
-            else { ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(lx, 0, sr, 0, 7); ctx.fill(); }
+            if (imgs.star) ctx.drawImage(imgs.star, -sr, ly - sr, sr * 2, sr * 2);
+            else { ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(0, ly, sr, 0, 7); ctx.fill(); }
           } else {
             ctx.globalAlpha = 0.45;
             ctx.strokeStyle = '#5b7bb5';
             ctx.lineWidth = Math.max(2, sr * 0.28);
-            ctx.beginPath(); ctx.arc(lx, 0, sr * 0.72, 0, 7); ctx.stroke();
+            ctx.beginPath(); ctx.arc(0, ly, sr * 0.72, 0, 7); ctx.stroke();
             ctx.globalAlpha = 1;
           }
         }
