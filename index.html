@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '3.4.0';
+  var APP_VERSION = '3.6.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -48,6 +48,10 @@
   loadImg('ttlStage','ttl-stage.png');
   loadImg('star',    'star.png');
   loadImg('skill',   'skill.png');
+  loadImg('skillSp', 'skill-split.png');
+  loadImg('win',     'win.png');
+  loadImg('lose',    'lose.png');
+  loadImg('trophy',  'trophy.png');
   loadImg('malletRZ','mallet-red-zap.png');
   loadImg('malletBZ','mallet-blue-zap.png');
   loadImg('bg',      'title-bg.jpg');
@@ -147,6 +151,7 @@
 
   // ---------------------------------------------------------------- 状態
   var puck = { x:0, y:0, vx:0, vy:0, r:0 };
+  var mainPuck = puck;       // 分裂中は puck を差し替えて計算するので、本体を覚えておく
   var mallets = [
     // side 0 = 下(プレイヤー1) / side 1 = 上(プレイヤー2 またはコンピューター)
     // svx/svy = 見た目どおりの速さ（数フレームならした値）。当たりの強さはこれで決める
@@ -187,6 +192,13 @@
   var starWait   = [0, 0];
   var charge     = [0, 0];
   var zap        = [0, 0];   // しびれの残り時間
+
+  // 必殺技その2「3つに分かれる」
+  var SPLIT_ANG  = 0.34;     // 分かれたパックが開く角度
+  var SPLIT_LIFE = 7.0;      // 分かれたパックが消えるまでの秒数
+  var armSplit   = [0, 0];   // 「つぎに打ったら分かれる」構え
+  var extras     = [];       // 分かれたパック（本体は mainPuck）
+  var splitFx    = null;     // 分かれた瞬間の光
   var pressIdx   = -1;       // 押されたボタン
   var pressT     = 0;
 
@@ -284,6 +296,7 @@
   }
 
   function resetPuck() {
+    clearExtras(false);
     puck.x = F.cx; puck.y = F.cy;
     puck.vx = 0; puck.vy = 0;
     trail.length = 0;
@@ -343,6 +356,17 @@
     [0, 1, 2].forEach(function (i) {
       beep(660 + n * 110 + i * 220, 0.11, 'square', 0.11, i * 0.055);
     });
+  }
+
+  // 「つぎの1発で分かれるよ」の合図
+  function sndSplitReady() {
+    [660, 990, 1320].forEach(function (f, i) { beep(f, 0.13, 'triangle', 0.15, i * 0.07); });
+  }
+
+  // パックが3つに分かれるときの「シャキーン！」
+  function sndSplit() {
+    [880, 1175, 1568].forEach(function (f, i) { beep(f, 0.17, 'square', 0.15, i * 0.05); });
+    beep(220, 0.30, 'sawtooth', 0.13, 0.02);
   }
 
   // 必殺技の「ビリビリ！」
@@ -600,13 +624,16 @@
       return;
     }
 
-    // 必殺技ボタン（3つたまっているときだけ反応する）
+    // 必殺技ボタン（3つたまっているときだけ反応する）。左右で技を選べる
     if (mode === 'play') {
       for (var sk = 0; sk < 2; sk++) {
         if (charge[sk] < STAR_NEED) continue;
         if (players === 1 && sk === 1) continue;    // 上はコンピューターが使う
-        var sp2 = skillBtnPos(sk), sr2 = skillR() * 1.5;
-        if (dist2(p.x, p.y, sp2.x, sp2.y) < sr2 * sr2) { fireSkill(sk); return; }
+        var sr2 = skillR() * 1.5;
+        for (var kd2 = 0; kd2 < 2; kd2++) {
+          var sp2 = skillBtnPos(sk, kd2);
+          if (dist2(p.x, p.y, sp2.x, sp2.y) < sr2 * sr2) { fireSkill(sk, kd2); return; }
+        }
       }
     }
 
@@ -726,7 +753,8 @@
     serveSide = 1 - side;      // 入れられた方から再開する
     flash = 1; shake = 1;
     burst(F.cx, side === 0 ? F.y : F.y + F.h, 36, F.w * 1.9);   // ゴール口からはじける
-    puck.vx = puck.vy = 0;
+    clearExtras(false);        // 分かれたパックは、どれか1つ入ったらおしまい
+    mainPuck.vx = mainPuck.vy = 0;
     if (score[side] >= WIN_SCORE) { mode = 'win'; modeTimer = 0; sndWin(); }
     else                          { mode = 'goal'; modeTimer = 0; sndGoal(); }
   }
@@ -807,10 +835,13 @@
   function starR()  { return mallets[0].r * 0.92; }
   function skillR() { return Math.min(F.w * 0.075, F.h * 0.045); }
 
-  // 集めた数と必殺技ボタンを置く場所（自陣のゴールがわの角）
-  function skillBtnPos(side) {
+  // 集めた数と必殺技ボタンを置く場所（自陣のゴールの左右の角）。
+  // kind 0 = しびれさせる技 / kind 1 = 3つに分かれる技。
+  // 上下どちらの人から見ても「左がしびれ・右が分裂」の並びになる
+  function skillBtnPos(side, kind) {
+    var left = (kind === 1) ? (side === 1) : (side === 0);
     return {
-      x: side === 0 ? F.x + F.w * 0.15 : F.x + F.w * 0.85,
+      x: left ? F.x + F.w * 0.15 : F.x + F.w * 0.85,
       y: side === 0 ? F.y + F.h * 0.945 : F.y + F.h * 0.055
     };
   }
@@ -820,7 +851,17 @@
     starWait[0] = 1.5 + Math.random() * 2;
     starWait[1] = 1.5 + Math.random() * 2;
     zap[0] = zap[1] = 0;
-    if (all) charge[0] = charge[1] = 0;
+    if (all) { charge[0] = charge[1] = 0; armSplit[0] = armSplit[1] = 0; }
+  }
+
+  // 分かれたパックを片づける
+  function clearExtras(pop) {
+    if (pop) {
+      for (var i = 0; i < extras.length; i++) burst(extras[i].x, extras[i].y, 10, F.w * 0.8);
+    }
+    extras.length = 0;
+    splitFx = null;
+    puck = mainPuck;
   }
 
   function spawnStar(side) {
@@ -840,8 +881,12 @@
       var off = FLD.circle * IMG.h + Math.min(IMG.w, IMG.h) * 0.019 * 2.6;
       if (Math.abs(y - (F.cy + off)) < starR() * 1.9) continue;
       if (Math.abs(y - (F.cy - off)) < starR() * 1.9) continue;
-      var bp = skillBtnPos(side), bd = starR() + skillR() * 1.6;
-      if (dist2(x, y, bp.x, bp.y) < bd * bd) continue;
+      var bd = starR() + skillR() * 1.6, onBtn = false;
+      for (var kd = 0; kd < 2; kd++) {
+        var bp = skillBtnPos(side, kd);
+        if (dist2(x, y, bp.x, bp.y) < bd * bd) { onBtn = true; break; }
+      }
+      if (onBtn) continue;
       stars[side] = { x: x, y: y, t: 0 };
       return;
     }
@@ -882,18 +927,53 @@
     }
   }
 
-  function fireSkill(side) {
-    var foe = 1 - side;
+  // kind 0 = 相手をしびれさせる / kind 1 = つぎに打ったパックが3つに分かれる
+  function fireSkill(side, kind) {
     charge[side] = 0;
     starWait[side] = STAR_MIN + Math.random() * (STAR_MAX - STAR_MIN);
-    zap[foe] = ZAP_TIME;
     ai.fireT = 0;
+
+    if (kind === 1) {
+      armSplit[side] = 1;                 // 打つまで構えたまま待つ
+      flash = Math.max(flash, 0.55);
+      burst(mallets[side].x, mallets[side].y, 20, F.w * 1.1);
+      sndSplitReady();
+      if (navigator.vibrate) { try { navigator.vibrate([25, 45, 25]); } catch (e) {} }
+      return;
+    }
+
+    var foe = 1 - side;
+    zap[foe] = ZAP_TIME;
     shake = Math.max(shake, 1.0);
     flash = Math.max(flash, 0.9);
     zapFx = { side: foe, x: mallets[foe].x, y: mallets[foe].y, t: 0, life: 0.7 };
     burst(mallets[foe].x, mallets[foe].y, 28, F.w * 1.5);
     sndZap();
     if (navigator.vibrate) { try { navigator.vibrate([40, 50, 40, 50, 90]); } catch (e) {} }
+  }
+
+  // 打った瞬間にパックが3つに分かれる
+  function doSplit(side) {
+    armSplit[side] = 0;
+    var sp = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
+    var base = Math.atan2(puck.vy, puck.vx);
+    for (var i = 0; i < 2; i++) {
+      var a = base + (i === 0 ? -SPLIT_ANG : SPLIT_ANG);
+      var cx = Math.cos(a), cy = Math.sin(a);
+      var e = {
+        x: puck.x + cx * puck.r * 0.8, y: puck.y + cy * puck.r * 0.8,
+        vx: cx * sp, vy: cy * sp, r: puck.r, t: 0, trail: []
+      };
+      e.x = clamp(e.x, F.x + e.r, F.x + F.w - e.r);
+      e.y = clamp(e.y, F.y + e.r, F.y + F.h - e.r);
+      extras.push(e);
+    }
+    splitFx = { x: puck.x, y: puck.y, t: 0, life: 0.45 };
+    shake = Math.max(shake, 0.85);
+    flash = Math.max(flash, 0.7);
+    burst(puck.x, puck.y, 24, F.w * 1.4);
+    sndSplit();
+    if (navigator.vibrate) { try { navigator.vibrate([35, 35, 35, 35, 70]); } catch (e) {} }
   }
 
   // ---------------------------------------------------------------- コンピューター
@@ -1103,6 +1183,43 @@
     if (power >= SMASH_AT) sndSmash(power);      // 強打は専用の音
     else                   sndHit(power);
     buzz(power);
+
+    // 「つぎの1発で分かれる」構えなら、打ったこの瞬間に3つになる
+    if (armSplit[m.side] && extras.length === 0 && mode === 'play') doSplit(m.side);
+  }
+
+  // 分かれたパックの摩擦・残像・寿命。しばらくすると消えて本体だけに戻る
+  function updateExtras(dt, f) {
+    for (var i = extras.length - 1; i >= 0; i--) {
+      var e = extras[i];
+      e.t += dt;
+      e.vx *= f; e.vy *= f;
+      // 隅で止まったままにならないよう、真ん中へそっと寄せる
+      var sp = Math.sqrt(e.vx * e.vx + e.vy * e.vy);
+      if (sp < 0.12 * F.w) {
+        var ax = F.cx - e.x, ay = F.cy - e.y;
+        var al = Math.sqrt(ax * ax + ay * ay) || 1;
+        e.vx += ax / al * 0.7 * F.w * dt;
+        e.vy += ay / al * 0.7 * F.w * dt;
+      }
+      e.trail.push({ x: e.x, y: e.y });
+      if (e.trail.length > 7) e.trail.shift();
+      if (e.t >= SPLIT_LIFE) { burst(e.x, e.y, 10, F.w * 0.8); extras.splice(i, 1); }
+    }
+  }
+
+  // 分かれたパックも本体と同じ計算を通す（puck を差し替えて使い回す）
+  function stepExtras(sdt) {
+    var scored = false;
+    for (var i = 0; i < extras.length; i++) {
+      puck = extras[i];
+      if (stepPuck(sdt)) { scored = true; break; }
+      collide(mallets[0]);
+      collide(mallets[1]);
+      clampPuckSpeed();
+    }
+    puck = mainPuck;
+    return scored;
   }
 
   // 打った手ごたえ（対応している端末だけ震える）
@@ -1123,6 +1240,7 @@
   function update(dt) {
     updateParts(dt);
     updateZapFx(dt);
+    if (splitFx) { splitFx.t += dt; if (splitFx.t >= splitFx.life) splitFx = null; }
     if (mode === 'play') updateStars(dt);
     wallCool -= dt; sparkCool -= dt;
     if (flash > 0) flash = Math.max(0, flash - dt * 2.6);
@@ -1224,6 +1342,9 @@
       var m3 = mallets[mi3];
       need = Math.max(need, Math.abs(m3.gx - m3.x), Math.abs(m3.gy - m3.y));
     }
+    for (var ei2 = 0; ei2 < extras.length; ei2++) {
+      need = Math.max(need, Math.abs(extras[ei2].vx * dt), Math.abs(extras[ei2].vy * dt));
+    }
     var N = Math.min(24, Math.max(8, Math.ceil(need / Math.max(1, puck.r * 0.8))));
     var sdt = dt / N;
 
@@ -1236,11 +1357,13 @@
       collide(mallets[0]);
       collide(mallets[1]);
       clampPuckSpeed();
+      if (extras.length && stepExtras(sdt)) break;
     }
 
     if (!frozen) {
       var f = Math.pow(0.88, dt);
       puck.vx *= f; puck.vy *= f;
+      updateExtras(dt, f);
       var sp = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
       if (sp < 0.012 * F.w) { puck.vx = puck.vy = 0; }
 
@@ -1384,42 +1507,90 @@
     ctx.beginPath(); ctx.arc(m.x, m.y, m.r * 0.28, 0, 7); ctx.fill();
   }
 
-  function drawPuck() {
-    var img = imgs['puck' + stageIdx];
-    for (var i = 0; i < trail.length; i++) {
-      var t = trail[i];
-      ctx.globalAlpha = (i + 1) / trail.length * (img ? 0.16 : 0.22);
-      ctx.fillStyle = img ? STAGES[stageIdx].tc : COL.puck;
-      ctx.beginPath(); ctx.arc(t.x, t.y, puck.r * 0.85, 0, 7); ctx.fill();
+  function drawPuck(t) {
+    drawOnePuck(mainPuck, trail, 1);
+    for (var i = 0; i < extras.length; i++) {
+      var e = extras[i];
+      var left = SPLIT_LIFE - e.t;
+      drawOnePuck(e, e.trail, left < 0.8 ? Math.max(0, left / 0.8) : 1);
     }
-    ctx.globalAlpha = 1;
+    if (!extras.length) drawSplitReady(t);
+    drawSplitFx();
+  }
+
+  function drawOnePuck(p, tr, alpha) {
+    var img = imgs['puck' + stageIdx];
+    for (var i = 0; i < tr.length; i++) {
+      var t = tr[i];
+      ctx.globalAlpha = (i + 1) / tr.length * (img ? 0.16 : 0.22) * alpha;
+      ctx.fillStyle = img ? STAGES[stageIdx].tc : COL.puck;
+      ctx.beginPath(); ctx.arc(t.x, t.y, p.r * 0.85, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = alpha;
 
     if (img) {
-      var d = puck.r * 2.37;      // 絵は円盤のまわりに1割の余白がある
+      var d = p.r * 2.37;        // 絵は円盤のまわりに1割の余白がある
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.4)';
-      ctx.shadowBlur = puck.r * 0.5;
-      ctx.shadowOffsetY = puck.r * 0.22;
-      ctx.drawImage(img, puck.x - d / 2, puck.y - d / 2, d, d);
+      ctx.shadowBlur = p.r * 0.5;
+      ctx.shadowOffsetY = p.r * 0.22;
+      ctx.drawImage(img, p.x - d / 2, p.y - d / 2, d, d);
       ctx.restore();
+      ctx.globalAlpha = 1;
       return;
     }
 
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.3)';
-    ctx.shadowBlur = puck.r * 0.6;
-    ctx.shadowOffsetY = puck.r * 0.2;
+    ctx.shadowBlur = p.r * 0.6;
+    ctx.shadowOffsetY = p.r * 0.2;
     ctx.fillStyle = COL.puckDark;
-    ctx.beginPath(); ctx.arc(puck.x, puck.y, puck.r, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
     ctx.restore();
 
     ctx.fillStyle = COL.puck;
-    ctx.beginPath(); ctx.arc(puck.x, puck.y, puck.r * 0.82, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.82, 0, 7); ctx.fill();
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.beginPath(); ctx.arc(puck.x - puck.r * 0.28, puck.y - puck.r * 0.3, puck.r * 0.24, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x - p.r * 0.28, p.y - p.r * 0.3, p.r * 0.24, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // 構えているあいだ、パックの左右にうすい分身を出して「分かれるよ」と見せる
+  function drawSplitReady(t) {
+    if (!armSplit[0] && !armSplit[1]) return;
+    var sp = Math.sqrt(mainPuck.vx * mainPuck.vx + mainPuck.vy * mainPuck.vy);
+    var base = sp > F.w * 0.05 ? Math.atan2(mainPuck.vy, mainPuck.vx) : -Math.PI / 2;
+    var d = mainPuck.r * (2.3 + Math.sin(t * 5) * 0.25);
+    ctx.save();
+    ctx.globalAlpha = 0.32 + Math.sin(t * 5) * 0.10;
+    for (var i = 0; i < 2; i++) {
+      var a = base + (i === 0 ? -SPLIT_ANG * 2.2 : SPLIT_ANG * 2.2);
+      var gx = mainPuck.x + Math.cos(a) * d, gy = mainPuck.y + Math.sin(a) * d;
+      var img = imgs['puck' + stageIdx];
+      if (img) { var s = mainPuck.r * 2.37; ctx.drawImage(img, gx - s / 2, gy - s / 2, s, s); }
+      else { ctx.fillStyle = COL.puck; ctx.beginPath(); ctx.arc(gx, gy, mainPuck.r, 0, 7); ctx.fill(); }
+    }
+    ctx.restore();
+  }
+
+  // 分かれた瞬間の光
+  function drawSplitFx() {
+    if (!splitFx) return;
+    var k = splitFx.t / splitFx.life;
+    var r = F.w * (0.05 + 0.30 * k);
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, 1 - k);
+    var g = ctx.createRadialGradient(splitFx.x, splitFx.y, r * 0.25, splitFx.x, splitFx.y, r);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.72, 'rgba(150,225,255,0.75)');
+    g.addColorStop(1, 'rgba(120,200,255,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(splitFx.x, splitFx.y, r, 0, 7); ctx.fill();
+    ctx.restore();
   }
 
   function drawStars(t) {
+    if (mode === 'win') return;          // 勝ち負けの発表中は隠す
     var img = imgs.star;
     var r = starR();
     for (var s = 0; s < 2; s++) {
@@ -1440,26 +1611,33 @@
 
   // 集めた数と、たまったときの必殺技ボタン
   function drawCharge(t) {
+    if (mode === 'win') return;          // 勝ち負けの発表中は隠す
     var R = skillR();
     for (var s = 0; s < 2; s++) {
       if (!usesStar(s)) continue;
-      var pos = skillBtnPos(s);
-      ctx.save();
-      ctx.translate(pos.x, pos.y);
-      if (s === 1) ctx.rotate(Math.PI);
-
       if (charge[s] >= STAR_NEED) {
-        var pulse = 1 + Math.sin(t * 6) * 0.09;
-        ctx.save();
-        ctx.scale(pulse, pulse);
-        ctx.globalAlpha = 0.35 + Math.sin(t * 6) * 0.2;
-        ctx.fillStyle = '#ffe14d';
-        ctx.beginPath(); ctx.arc(0, 0, R * 1.35, 0, 7); ctx.fill();
-        ctx.globalAlpha = 1;
-        if (imgs.skill) ctx.drawImage(imgs.skill, -R, -R, R * 2, R * 2);
-        else { ctx.fillStyle = '#2f7dff'; ctx.beginPath(); ctx.arc(0, 0, R, 0, 7); ctx.fill(); }
-        ctx.restore();
+        // 3つそろったら、2つの技が光る。押した方が出る
+        for (var kd = 0; kd < 2; kd++) {
+          var bp = skillBtnPos(s, kd);
+          var ph = t * 6 + kd * 1.2;
+          ctx.save();
+          ctx.translate(bp.x, bp.y);
+          if (s === 1) ctx.rotate(Math.PI);
+          ctx.scale(1 + Math.sin(ph) * 0.09, 1 + Math.sin(ph) * 0.09);
+          ctx.globalAlpha = 0.35 + Math.sin(ph) * 0.2;
+          ctx.fillStyle = kd === 0 ? '#ffe14d' : '#7fe0ff';
+          ctx.beginPath(); ctx.arc(0, 0, R * 1.35, 0, 7); ctx.fill();
+          ctx.globalAlpha = 1;
+          var bi = kd === 0 ? imgs.skill : imgs.skillSp;
+          if (bi) ctx.drawImage(bi, -R, -R, R * 2, R * 2);
+          else { ctx.fillStyle = kd === 0 ? '#2f7dff' : '#00b3ff'; ctx.beginPath(); ctx.arc(0, 0, R, 0, 7); ctx.fill(); }
+          ctx.restore();
+        }
       } else {
+        var pos = skillBtnPos(s, 0);
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+        if (s === 1) ctx.rotate(Math.PI);
         var sr = R * 0.44, gap = sr * 2.3;
         for (var i = 0; i < STAR_NEED; i++) {
           var lx = (i - (STAR_NEED - 1) / 2) * gap;
@@ -1474,8 +1652,20 @@
             ctx.globalAlpha = 1;
           }
         }
+        ctx.restore();
       }
-      ctx.restore();
+
+      // 「つぎに打ったら分かれる」構えの印
+      if (armSplit[s]) {
+        var ap = skillBtnPos(s, 1), ar = R * 0.66;
+        ctx.save();
+        ctx.translate(ap.x, ap.y);
+        if (s === 1) ctx.rotate(Math.PI);
+        ctx.globalAlpha = 0.55 + Math.sin(t * 7) * 0.35;
+        if (imgs.skillSp) ctx.drawImage(imgs.skillSp, -ar, -ar, ar * 2, ar * 2);
+        else { ctx.fillStyle = '#00b3ff'; ctx.beginPath(); ctx.arc(0, 0, ar, 0, 7); ctx.fill(); }
+        ctx.restore();
+      }
     }
   }
 
@@ -1837,30 +2027,46 @@
     var ef = Math.min(IMG.w * 0.22, IMG.h * 0.13);
     var fs = Math.min(IMG.w * 0.11, IMG.h * 0.062);
     var ss = Math.min(IMG.w * 0.058, IMG.h * 0.032);
+    var u  = Math.min(F.w * 0.52, F.h * 0.24);   // 自陣の半分に収まる大きさ
 
     for (var side = 0; side < 2; side++) {
       var won = (goalSide === side);
       ctx.save();
-      if (side === 0) ctx.translate(F.cx, F.y + F.h * 0.76);
-      else { ctx.translate(F.cx, F.y + F.h * 0.24); ctx.rotate(Math.PI); }
+      if (side === 0) ctx.translate(F.cx, F.y + F.h * 0.74);
+      else { ctx.translate(F.cx, F.y + F.h * 0.26); ctx.rotate(Math.PI); }
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      ctx.font = ef + EMO;
-      ctx.fillText(won ? '🏆' : '👏', 0, -ef * 0.72 + (won ? bounce : 0));
+      // 勝った方にはトロフィー
+      if (won && imgs.trophy) {
+        var tp = imgs.trophy;
+        var th = u * 0.60, tw = th * (tp.width / tp.height);
+        if (tw > u * 1.05) { tw = u * 1.05; th = tw * (tp.height / tp.width); }
+        ctx.drawImage(tp, -tw / 2, -u * 0.68 - th / 2 + bounce, tw, th);
+      }
 
-      ctx.font = '900 ' + fs + SANS;
-      ctx.lineWidth = fs * 0.18;
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineJoin = 'round';
-      var msg = won ? 'かち！' : 'まけ…';
-      ctx.strokeText(msg, 0, ef * 0.16);
-      ctx.fillStyle = won ? col : '#9fb2cf';
-      ctx.fillText(msg, 0, ef * 0.16);
+      var bi = won ? imgs.win : imgs.lose;
+      if (bi) {
+        // 「かち」「まけ」は横幅をそろえて、どちらも同じ大きさに見えるようにする
+        var bw = u, bh = bw * (bi.height / bi.width);
+        if (bh > u * 0.62) { bh = u * 0.62; bw = bh * (bi.width / bi.height); }
+        ctx.drawImage(bi, -bw / 2, -bh / 2 + (won ? bounce * 0.4 : 0), bw, bh);
+      } else {
+        // 絵が読めていないあいだの代わり
+        if (won) { ctx.font = ef + EMO; ctx.fillText('🏆', 0, -u * 0.6 + bounce); }
+        ctx.font = '900 ' + fs + SANS;
+        ctx.lineWidth = fs * 0.18;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineJoin = 'round';
+        var msg = won ? 'かち！' : 'まけ…';
+        ctx.strokeText(msg, 0, 0);
+        ctx.fillStyle = won ? col : '#9fb2cf';
+        ctx.fillText(msg, 0, 0);
+      }
 
       ctx.font = '700 ' + ss + SANS;
       ctx.fillStyle = 'rgba(255,255,255,' + (0.55 + Math.sin(t * 3) * 0.3) + ')';
-      ctx.fillText('タップで もういちど', 0, ef * 0.16 + fs * 1.15);
+      ctx.fillText('タップで もういちど', 0, u * 0.48 + ss);
       ctx.restore();
     }
   }
@@ -2067,7 +2273,7 @@
     if (mode !== 'janken') {          // じゃんけん中は盤上を空にしておく
       drawStars(t);
       drawCharge(t);
-      if (mode !== 'goal' || modeTimer < 0.85) drawPuck();
+      if (mode !== 'goal' || modeTimer < 0.85) drawPuck(t);
       drawMallet(mallets[0]);
       drawMallet(mallets[1]);
       drawZapFx();

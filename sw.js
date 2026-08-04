@@ -1,6 +1,6 @@
 /* オフラインでも遊べるようにキャッシュする。
    中身を更新したら CACHE の番号と index.html の APP_VERSION を必ず上げること。 */
-var CACHE = 'hockey-v33';
+var CACHE = 'hockey-v34';
 
 var ASSETS = [
   './',
@@ -12,6 +12,10 @@ var ASSETS = [
   './ttl-stage.png',
   './star.png',
   './skill.png',
+  './skill-split.png',
+  './win.png',
+  './lose.png',
+  './trophy.png',
   './mallet-red-zap.png',
   './mallet-blue-zap.png',
   './title-bg.jpg',
