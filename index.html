@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '3.7.1';
+  var APP_VERSION = '3.8.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -193,11 +193,13 @@
   var charge     = [0, 0];
   var zap        = [0, 0];   // しびれの残り時間
 
-  // 必殺技その2「3つに分かれる」
-  var SPLIT_ANG  = 0.34;     // 分かれたパックが開く角度
+  // 必殺技その2「2つに分かれる」
+  // 開きすぎると2つとも網をはずれてしまうので、
+  // まっすぐ打ったときに両方がゴール口の左右をねらえる角度にしてある
+  var SPLIT_ANG  = 0.15;     // 分かれたパックが左右に開く角度（片側ぶん）
   var SPLIT_LIFE = 7.0;      // 分かれたパックが消えるまでの秒数
   var armSplit   = [0, 0];   // 「つぎに打ったら分かれる」構え
-  var extras     = [];       // 分かれたパック（本体は mainPuck）
+  var extras     = [];       // 増えたぶんのパック（本体は mainPuck）
   var splitOwner = -1;       // 分裂を出した人。この人のゴールはフタがされる
   var splitFx    = null;     // 分かれた瞬間の光
   var pressIdx   = -1;       // 押されたボタン
@@ -364,7 +366,7 @@
     [660, 990, 1320].forEach(function (f, i) { beep(f, 0.13, 'triangle', 0.15, i * 0.07); });
   }
 
-  // パックが3つに分かれるときの「シャキーン！」
+  // パックが2つに分かれるときの「シャキーン！」
   function sndSplit() {
     [880, 1175, 1568].forEach(function (f, i) { beep(f, 0.17, 'square', 0.15, i * 0.05); });
     beep(220, 0.30, 'sawtooth', 0.13, 0.02);
@@ -625,7 +627,7 @@
       return;
     }
 
-    // 必殺技ボタン（3つたまっているときだけ反応する）。左右で技を選べる
+    // 必殺技ボタン（ほしが3つたまっているときだけ反応する）。2つから技を選べる
     if (mode === 'play') {
       for (var sk = 0; sk < 2; sk++) {
         if (charge[sk] < STAR_NEED) continue;
@@ -840,7 +842,7 @@
   function skillR() { return Math.min(F.w * 0.075, F.h * 0.045); }
 
   // 集めた数と必殺技ボタンを置く場所。2つとも自陣の左はしにたてに並べる。
-  // kind 0 = しびれさせる技（下）/ kind 1 = 3つに分かれる技（その上）。
+  // kind 0 = しびれさせる技（下）/ kind 1 = 2つに分かれる技（その上）。
   // 上下どちらの人から見ても、自分の左に同じ並びで見える
   function skillBtnPos(side, kind) {
     var up = (kind === 1) ? skillR() * 2.6 : 0;
@@ -932,7 +934,7 @@
     }
   }
 
-  // kind 0 = 相手をしびれさせる / kind 1 = つぎに打ったパックが3つに分かれる
+  // kind 0 = 相手をしびれさせる / kind 1 = つぎに打ったパックが2つに分かれる
   function fireSkill(side, kind) {
     charge[side] = 0;
     starWait[side] = STAR_MIN + Math.random() * (STAR_MAX - STAR_MIN);
@@ -957,27 +959,31 @@
     if (navigator.vibrate) { try { navigator.vibrate([40, 50, 40, 50, 90]); } catch (e) {} }
   }
 
-  // 打った瞬間にパックが3つに分かれる
+  // 打った瞬間にパックが2つに分かれる。
+  // 本体を左へ振り、右へもう1枚出して、きれいなハの字に飛ばす
   function doSplit(side) {
     armSplit[side] = 0;
     var sp = Math.sqrt(puck.vx * puck.vx + puck.vy * puck.vy);
     var base = Math.atan2(puck.vy, puck.vx);
-    for (var i = 0; i < 2; i++) {
-      var a = base + (i === 0 ? -SPLIT_ANG : SPLIT_ANG);
-      var cx = Math.cos(a), cy = Math.sin(a);
-      var e = {
-        x: puck.x + cx * puck.r * 0.8, y: puck.y + cy * puck.r * 0.8,
-        vx: cx * sp, vy: cy * sp, r: puck.r, t: 0, trail: []
-      };
-      e.x = clamp(e.x, F.x + e.r, F.x + F.w - e.r);
-      e.y = clamp(e.y, F.y + e.r, F.y + F.h - e.r);
-      extras.push(e);
-    }
+    var ox = puck.x, oy = puck.y;
+
+    var la = base - SPLIT_ANG;
+    puck.vx = Math.cos(la) * sp; puck.vy = Math.sin(la) * sp;
+    puck.x = clamp(ox + Math.cos(la) * puck.r * 0.8, F.x + puck.r, F.x + F.w - puck.r);
+    puck.y = clamp(oy + Math.sin(la) * puck.r * 0.8, F.y + puck.r, F.y + F.h - puck.r);
+
+    var ra = base + SPLIT_ANG;
+    var e = {
+      x: clamp(ox + Math.cos(ra) * puck.r * 0.8, F.x + puck.r, F.x + F.w - puck.r),
+      y: clamp(oy + Math.sin(ra) * puck.r * 0.8, F.y + puck.r, F.y + F.h - puck.r),
+      vx: Math.cos(ra) * sp, vy: Math.sin(ra) * sp, r: puck.r, t: 0, trail: []
+    };
+    extras.push(e);
     splitOwner = side;
-    splitFx = { x: puck.x, y: puck.y, t: 0, life: 0.45 };
+    splitFx = { x: ox, y: oy, t: 0, life: 0.45 };
     shake = Math.max(shake, 0.85);
     flash = Math.max(flash, 0.7);
-    burst(puck.x, puck.y, 24, F.w * 1.4);
+    burst(ox, oy, 24, F.w * 1.4);
     sndSplit();
     if (navigator.vibrate) { try { navigator.vibrate([35, 35, 35, 35, 70]); } catch (e) {} }
   }
@@ -1107,8 +1113,8 @@
     return false;
   }
 
-  // パックが3つに分かれているあいだは、出した人のゴールにフタをする。
-  // 自分の技で自分が損をしないようにするため（3つとも跳ね返る）
+  // パックが2つに分かれているあいだは、出した人のゴールにフタをする。
+  // 自分の技で自分が損をしないようにするため（2つとも跳ね返る）
   function goalShut(scorer) {
     return splitOwner >= 0 && extras.length > 0 && scorer === 1 - splitOwner;
   }
@@ -1196,7 +1202,7 @@
     else                   sndHit(power);
     buzz(power);
 
-    // 「つぎの1発で分かれる」構えなら、打ったこの瞬間に3つになる。
+    // 「つぎの1発で分かれる」構えなら、打ったこの瞬間に2つになる。
     // ただし相手のゴールに向かって打てたときだけ。自分のゴールへ戻す
     // 当たりでは出さずに、構えたまま次の攻撃を待つ
     if (armSplit[m.side] && extras.length === 0 && mode === 'play') {
@@ -1609,7 +1615,7 @@
     ctx.restore();
   }
 
-  // 構えているあいだ、パックの左右にうすい分身を出して「分かれるよ」と見せる
+  // 構えているあいだ、パックの左右にうすい分身を出して「2つに分かれるよ」と見せる
   function drawSplitReady(t) {
     if (!armSplit[0] && !armSplit[1]) return;
     var sp = Math.sqrt(mainPuck.vx * mainPuck.vx + mainPuck.vy * mainPuck.vy);
@@ -1618,7 +1624,8 @@
     ctx.save();
     ctx.globalAlpha = 0.32 + Math.sin(t * 5) * 0.10;
     for (var i = 0; i < 2; i++) {
-      var a = base + (i === 0 ? -SPLIT_ANG * 2.2 : SPLIT_ANG * 2.2);
+      // 見せるための開きは、実際の角度より広めにして分かりやすくする
+      var a = base + (i === 0 ? -0.5 : 0.5);
       var gx = mainPuck.x + Math.cos(a) * d, gy = mainPuck.y + Math.sin(a) * d;
       var img = imgs['puck' + stageIdx];
       if (img) { var s = mainPuck.r * 2.37; ctx.drawImage(img, gx - s / 2, gy - s / 2, s, s); }
