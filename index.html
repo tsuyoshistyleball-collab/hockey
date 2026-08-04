@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '3.7.0';
+  var APP_VERSION = '3.7.1';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -630,11 +630,14 @@
       for (var sk = 0; sk < 2; sk++) {
         if (charge[sk] < STAR_NEED) continue;
         if (players === 1 && sk === 1) continue;    // 上はコンピューターが使う
-        var sr2 = skillR() * 1.5;
+        // 2つ並んでいるので、指がとどく中でいちばん近い方を選ぶ
+        var sr2 = skillR() * 1.5, best = -1, bestD = sr2 * sr2;
         for (var kd2 = 0; kd2 < 2; kd2++) {
           var sp2 = skillBtnPos(sk, kd2);
-          if (dist2(p.x, p.y, sp2.x, sp2.y) < sr2 * sr2) { fireSkill(sk, kd2); return; }
+          var d2 = dist2(p.x, p.y, sp2.x, sp2.y);
+          if (d2 < bestD) { bestD = d2; best = kd2; }
         }
+        if (best >= 0) { fireSkill(sk, best); return; }
       }
     }
 
@@ -836,14 +839,14 @@
   function starR()  { return mallets[0].r * 0.92; }
   function skillR() { return Math.min(F.w * 0.075, F.h * 0.045); }
 
-  // 集めた数と必殺技ボタンを置く場所（自陣のゴールの左右の角）。
-  // kind 0 = しびれさせる技 / kind 1 = 3つに分かれる技。
-  // 上下どちらの人から見ても「左がしびれ・右が分裂」の並びになる
+  // 集めた数と必殺技ボタンを置く場所。2つとも自陣の左はしにたてに並べる。
+  // kind 0 = しびれさせる技（下）/ kind 1 = 3つに分かれる技（その上）。
+  // 上下どちらの人から見ても、自分の左に同じ並びで見える
   function skillBtnPos(side, kind) {
-    var left = (kind === 1) ? (side === 1) : (side === 0);
+    var up = (kind === 1) ? skillR() * 2.6 : 0;
     return {
-      x: left ? F.x + F.w * 0.15 : F.x + F.w * 0.85,
-      y: side === 0 ? F.y + F.h * 0.945 : F.y + F.h * 0.055
+      x: side === 0 ? F.x + F.w * 0.15 : F.x + F.w * 0.85,
+      y: side === 0 ? F.y + F.h * 0.945 - up : F.y + F.h * 0.055 + up
     };
   }
 
