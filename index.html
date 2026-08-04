@@ -30,7 +30,7 @@
   'use strict';
 
   // 更新したら必ずここと sw.js の CACHE を上げる
-  var APP_VERSION = '3.6.0';
+  var APP_VERSION = '3.7.0';
 
   var cvs = document.getElementById('g');
   var ctx = cvs.getContext('2d');
@@ -198,6 +198,7 @@
   var SPLIT_LIFE = 7.0;      // 分かれたパックが消えるまでの秒数
   var armSplit   = [0, 0];   // 「つぎに打ったら分かれる」構え
   var extras     = [];       // 分かれたパック（本体は mainPuck）
+  var splitOwner = -1;       // 分裂を出した人。この人のゴールはフタがされる
   var splitFx    = null;     // 分かれた瞬間の光
   var pressIdx   = -1;       // 押されたボタン
   var pressT     = 0;
@@ -860,6 +861,7 @@
       for (var i = 0; i < extras.length; i++) burst(extras[i].x, extras[i].y, 10, F.w * 0.8);
     }
     extras.length = 0;
+    splitOwner = -1;
     splitFx = null;
     puck = mainPuck;
   }
@@ -968,6 +970,7 @@
       e.y = clamp(e.y, F.y + e.r, F.y + F.h - e.r);
       extras.push(e);
     }
+    splitOwner = side;
     splitFx = { x: puck.x, y: puck.y, t: 0, life: 0.45 };
     shake = Math.max(shake, 0.85);
     flash = Math.max(flash, 0.7);
@@ -1084,7 +1087,7 @@
 
     // 上のゴール（入ると下のプレイヤーの得点）
     if (puck.y - puck.r < top) {
-      if (inGoalX) {
+      if (inGoalX && !goalShut(0)) {
         if (puck.y < top - puck.r * 0.4) { scoreGoal(0); return true; }
       } else {
         bump(Math.abs(puck.vy), puck.x, top, 0, 1); puck.y = top + puck.r; puck.vy = Math.abs(puck.vy) * WALL_BOUNCE;
@@ -1092,13 +1095,19 @@
     }
     // 下のゴール（入ると上のプレイヤーの得点）
     if (puck.y + puck.r > bottom) {
-      if (inGoalX) {
+      if (inGoalX && !goalShut(1)) {
         if (puck.y > bottom + puck.r * 0.4) { scoreGoal(1); return true; }
       } else {
         bump(Math.abs(puck.vy), puck.x, bottom, 0, -1); puck.y = bottom - puck.r; puck.vy = -Math.abs(puck.vy) * WALL_BOUNCE;
       }
     }
     return false;
+  }
+
+  // パックが3つに分かれているあいだは、出した人のゴールにフタをする。
+  // 自分の技で自分が損をしないようにするため（3つとも跳ね返る）
+  function goalShut(scorer) {
+    return splitOwner >= 0 && extras.length > 0 && scorer === 1 - splitOwner;
   }
 
   var wallCool = 0, sparkCool = 0;
@@ -1184,8 +1193,13 @@
     else                   sndHit(power);
     buzz(power);
 
-    // 「つぎの1発で分かれる」構えなら、打ったこの瞬間に3つになる
-    if (armSplit[m.side] && extras.length === 0 && mode === 'play') doSplit(m.side);
+    // 「つぎの1発で分かれる」構えなら、打ったこの瞬間に3つになる。
+    // ただし相手のゴールに向かって打てたときだけ。自分のゴールへ戻す
+    // 当たりでは出さずに、構えたまま次の攻撃を待つ
+    if (armSplit[m.side] && extras.length === 0 && mode === 'play') {
+      var fwd = m.side === 0 ? -puck.vy : puck.vy;
+      if (fwd > 0.10 * F.w) doSplit(m.side);
+    }
   }
 
   // 分かれたパックの摩擦・残像・寿命。しばらくすると消えて本体だけに戻る
@@ -1508,6 +1522,7 @@
   }
 
   function drawPuck(t) {
+    drawGoalShield(t);
     drawOnePuck(mainPuck, trail, 1);
     for (var i = 0; i < extras.length; i++) {
       var e = extras[i];
@@ -1553,6 +1568,42 @@
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.beginPath(); ctx.arc(p.x - p.r * 0.28, p.y - p.r * 0.3, p.r * 0.24, 0, 7); ctx.fill();
     ctx.globalAlpha = 1;
+  }
+
+  // 分かれているあいだ、出した人のゴールにかかっている光のフタ
+  function drawGoalShield(t) {
+    if (splitOwner < 0 || !extras.length) return;
+    var gy = splitOwner === 0 ? F.y + F.h : F.y;
+    var gh = goalHalfWidth();
+    var th = Math.max(3, F.w * 0.022);
+    var pulse = 0.5 + Math.sin(t * 8) * 0.5;
+
+    function bar(w, col, a) {
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = w;
+      ctx.beginPath(); ctx.moveTo(F.cx - gh, gy); ctx.lineTo(F.cx + gh, gy); ctx.stroke();
+    }
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    // 白い氷でも黒い岩でも見えるように、暗いふちを敷いてから光らせる
+    bar(th * 3.4, 'rgba(20,70,140,0.30)', 1);
+    bar(th * 2.0, '#1b4ea8', 0.85);
+    bar(th * 1.15, '#3ec8ff', 0.95);
+    bar(th * 0.45, '#ffffff', 0.75 + pulse * 0.25);
+    // 端の光る玉と、ぱちぱち光る点
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = '#eafcff';
+    for (var s = -1; s <= 1; s += 2) {
+      ctx.beginPath(); ctx.arc(F.cx + s * gh, gy, th * (0.9 + pulse * 0.25), 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 0.35 + pulse * 0.45;
+    for (var i = 0; i < 5; i++) {
+      var px = F.cx - gh + (gh * 2) * ((i + 0.5) / 5);
+      ctx.beginPath(); ctx.arc(px, gy, th * 0.34, 0, 7); ctx.fill();
+    }
+    ctx.restore();
   }
 
   // 構えているあいだ、パックの左右にうすい分身を出して「分かれるよ」と見せる
